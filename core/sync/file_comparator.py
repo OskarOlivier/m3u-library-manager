@@ -2,7 +2,7 @@
 
 import logging
 from pathlib import Path
-from typing import Dict, Set, List, Tuple, Optional
+from typing import Dict, Set, List, Tuple, Optional, Callable
 from dataclasses import dataclass
 import tempfile
 
@@ -53,7 +53,7 @@ class FileComparator:
                               playlist_path: Path,
                               local_base: Path,
                               remote_base: str,
-                              progress_callback=None) -> ComparisonResult:
+                              progress_callback: Optional[Callable[[float], None]] = None) -> ComparisonResult:
         """
         Compare playlist contents between local and remote locations
         """

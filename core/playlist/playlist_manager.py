@@ -1,6 +1,8 @@
+# core/playlist/playlist_manager.py
 from pathlib import Path
 from typing import Optional, Tuple, List
 from core.matching.song_matcher import SongMatcher
+from core.common.file_utils import search_music_directory
 from .operations import PlaylistOperations
 
 class PlaylistManager:
@@ -18,10 +20,10 @@ class PlaylistManager:
         """
         try:
             # Find matching files
-            files, _ = self.matcher.find_matches(
-                title=title,
+            files = search_music_directory(
                 artist=artist,
-                music_dir=str(self.music_dir)
+                title=title,
+                music_dir=self.music_dir
             )
             
             if not files:

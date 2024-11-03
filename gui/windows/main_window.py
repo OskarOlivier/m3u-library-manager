@@ -7,7 +7,7 @@ from PyQt6.QtGui import QFont
 from pathlib import Path
 
 from .pages.curation_page import CurationPage
-from .pages.sync_page import SyncPage  # This import should now work
+from .pages.sync_page import SyncPage
 from .pages.explore_page import ExplorePage
 
 class NavigationButton(QLabel):

@@ -1,6 +1,9 @@
-from . import BasePage
+# gui/windows/pages/explore_page.py
+
 from PyQt6.QtWidgets import QLabel, QVBoxLayout
 from PyQt6.QtCore import Qt
+
+from gui.windows.pages import BasePage
 
 class ExplorePage(BasePage):
     def setup_ui(self):

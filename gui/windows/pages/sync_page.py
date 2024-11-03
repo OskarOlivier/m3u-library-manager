@@ -4,12 +4,13 @@ from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
                            QPushButton, QListWidget, QFrame, QProgressBar,
                            QMessageBox, QApplication, QListWidgetItem)
 from PyQt6.QtCore import Qt, QThread
-from PyQt6.QtGui import QFont
+from PyQt6.QtGui import QFont, QAction
 from pathlib import Path
 from typing import Set, Optional
 import asyncio
+import logging
 
-from . import BasePage
+from gui.windows.pages import BasePage
 from gui.dialogs.credentials_dialog import PasswordDialog, SSHCredentialsResult
 from gui.workers.sync_workers import ComparisonWorker, SyncWorker
 from gui.widgets.sync_widgets import FileListWidget

@@ -5,13 +5,13 @@ from pathlib import Path
 import asyncio
 from typing import Set
 
-from core.sync.file_comparator import FileComparator, ComparisonResult
+from infrastructure.ssh.file_comparator import FileComparator, ComparisonResult
 from core.sync.sync_operations import SyncOperations
 
 class ComparisonWorker(QThread):
     """Background worker for file comparison"""
     finished = pyqtSignal(ComparisonResult)
-    progress = pyqtSignal(int)
+    progress = pyqtSignal(int)  # Changed to int
     error = pyqtSignal(str)
     
     def __init__(self, comparator: FileComparator, playlist_path: Path,
@@ -31,7 +31,7 @@ class ComparisonWorker(QThread):
                     self.playlist_path,
                     self.local_base,
                     self.remote_base,
-                    lambda p: self.progress.emit(int(p))
+                    lambda p: self.progress.emit(int(p))  # Convert to int here
                 )
             )
             self.finished.emit(result)
@@ -41,7 +41,7 @@ class ComparisonWorker(QThread):
 class SyncWorker(QThread):
     """Background worker for sync operations"""
     finished = pyqtSignal()
-    progress = pyqtSignal(int)
+    progress = pyqtSignal(int)  # Changed to int
     error = pyqtSignal(str)
     
     def __init__(self, sync_ops: SyncOperations, playlist_path: Path,
@@ -66,7 +66,7 @@ class SyncWorker(QThread):
                     self.add_local,
                     self.remove_remote,
                     self.remove_local,
-                    lambda p: self.progress.emit(int(p))
+                    lambda p: self.progress.emit(int(p))  # Convert to int here
                 )
             )
             self.finished.emit()

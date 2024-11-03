@@ -1,11 +1,12 @@
 # gui/windows/pages/curation_page.py
-from . import BasePage
+
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
                            QScrollArea, QGridLayout, QFrame)
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QObject
 from PyQt6.QtGui import QFont
 from pathlib import Path
 
+from gui.windows.pages import BasePage
 from core.matching.window_handler import WindowHandler
 from core.playlist.playlist_manager import PlaylistManager
 
