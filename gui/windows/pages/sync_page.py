@@ -18,26 +18,34 @@ from core.sync.ssh_handler import SSHHandler, SSHCredentials
 from core.sync.file_comparator import FileComparator
 from core.sync.sync_operations import SyncOperations
 from core.sync.backup_manager import BackupManager
+from data.cache.analysis_cache import AnalysisCache
 from utils.logging.sync_logger import SyncLogger
 
 class SyncPage(BasePage):
-    """Sync page implementation"""
+    """Sync page implementation with analysis caching"""
     def __init__(self):
+        # Initialize paths
         self.local_base = Path(r"E:\Albums")
         self.backup_dir = Path(r"D:\Music\Dopamine\Playlists\backups")
         self.playlists_dir = Path(r"D:\Music\Dopamine\Playlists")
+        self.cache_dir = Path.home() / ".m3u_library_manager" / "cache" / "analysis"
+        
+        # Initialize cache and managers
+        self.analysis_cache = AnalysisCache(self.cache_dir)
+        self.backup_manager = BackupManager(self.backup_dir)
+        self.sync_logger = SyncLogger(self.backup_dir / "logs")
         
         # Fixed SSH credentials
         self.SSH_HOST = "192.168.178.43"
         self.SSH_USERNAME = "pi"
         self.SSH_REMOTE_PATH = "/media/CHIA/Music"
         
+        # Initialize handlers
         self.ssh_handler = None
         self.file_comparator = None
         self.sync_ops = None
-        self.backup_manager = BackupManager(self.backup_dir)
-        self.sync_logger = SyncLogger(self.backup_dir / "logs")
         
+        # State tracking
         self.current_playlist = None
         self.comparison_worker = None
         self.sync_worker = None
@@ -117,12 +125,6 @@ class SyncPage(BasePage):
         # Load initial playlists
         self.refresh_playlists()
         
-    def set_sync_buttons_enabled(self, enabled: bool):
-        """Enable or disable sync buttons"""
-        for btn in [self.add_remote_btn, self.delete_local_btn,
-                   self.add_local_btn, self.delete_remote_btn]:
-            btn.setEnabled(enabled)
-            
     def create_playlist_column(self) -> QVBoxLayout:
         """Create the playlist list column"""
         layout = QVBoxLayout()
@@ -276,12 +278,20 @@ class SyncPage(BasePage):
                          if p.name != "Love.bak.m3u")  # Skip backup playlist
         
         for playlist in playlists:
-            self.add_playlist_item(playlist)
+            # Check cache for counts
+            cached_result = self.analysis_cache.get_result(playlist)
+            if cached_result:
+                self.add_playlist_item(playlist, 
+                                     len(cached_result.missing_remotely),
+                                     len(cached_result.missing_locally))
+            else:
+                self.add_playlist_item(playlist)
             
         # Update count
         self.playlist_count_label.setText(f"{len(playlists)} playlists")
         
-    def add_playlist_item(self, playlist_path: Path, missing_remote: int = None, missing_local: int = None):
+    def add_playlist_item(self, playlist_path: Path, missing_remote: int = None, 
+                         missing_local: int = None):
         """Add playlist item with optional sync status"""
         display_name = playlist_path.name
         if missing_remote is not None and missing_local is not None:
@@ -291,19 +301,56 @@ class SyncPage(BasePage):
         item.setData(Qt.ItemDataRole.UserRole, str(playlist_path))
         self.playlist_list.addItem(item)
         
+    def update_playlist_item(self, playlist_path: Path, missing_remote: int = None, 
+                            missing_local: int = None):
+        """Update existing playlist item with sync status"""
+        display_name = playlist_path.name
+        if missing_remote is not None and missing_local is not None:
+            display_name = f"{playlist_path.name} ({missing_remote}, {missing_local})"
+        
+        # Find existing item
+        for i in range(self.playlist_list.count()):
+            item = self.playlist_list.item(i)
+            if Path(item.data(Qt.ItemDataRole.UserRole)) == playlist_path:
+                item.setText(display_name)
+                return
+                
+        # If not found, add new item
+        item = QListWidgetItem(display_name)
+        item.setData(Qt.ItemDataRole.UserRole, str(playlist_path))
+        self.playlist_list.addItem(item)
+        
     def on_playlist_selected(self, item):
         """Handle playlist selection"""
         self.current_playlist = Path(item.data(Qt.ItemDataRole.UserRole))
+        
         # Clear previous results
         self.missing_remote_list.clear()
         self.missing_local_list.clear()
         self.remote_count_label.setText("")
         self.local_count_label.setText("")
-        self.status_label.setText(f"Selected: {self.current_playlist.name}")
         
-        # Disable sync buttons until analysis is done
-        self.set_sync_buttons_enabled(False)
-        
+        # Check cache first
+        cached_result = self.analysis_cache.get_result(self.current_playlist)
+        if cached_result:
+            self.status_label.setText(f"Loaded cached analysis for: {self.current_playlist.name}")
+            
+            # Update missing remotely list
+            for path in sorted(cached_result.missing_remotely):
+                self.missing_remote_list.add_file_item(path)
+            self.remote_count_label.setText(f"{len(cached_result.missing_remotely)} files")
+            
+            # Update missing locally list
+            for path in sorted(cached_result.missing_locally):
+                self.missing_local_list.add_file_item(path)
+            self.local_count_label.setText(f"{len(cached_result.missing_locally)} files")
+            
+            # Enable sync buttons since we have results
+            self.set_sync_buttons_enabled(True)
+        else:
+            self.status_label.setText(f"Selected: {self.current_playlist.name}")
+            self.set_sync_buttons_enabled(False)
+            
     def get_ssh_connection(self) -> bool:
         """Establish SSH connection if needed"""
         if self.ssh_handler is None:
@@ -338,6 +385,12 @@ class SyncPage(BasePage):
             self.file_comparator = FileComparator(self.ssh_handler)
             
         return True
+            
+    def set_sync_buttons_enabled(self, enabled: bool):
+        """Enable or disable sync buttons"""
+        for btn in [self.add_remote_btn, self.delete_local_btn,
+                   self.add_local_btn, self.delete_remote_btn]:
+            btn.setEnabled(enabled)
             
     def on_analyze_clicked(self):
         """Handle analyze button click"""
@@ -396,6 +449,13 @@ class SyncPage(BasePage):
                     self.SSH_REMOTE_PATH
                 ))
                 
+                # Cache the results
+                self.analysis_cache.store_result(
+                    playlist_path,
+                    list(result.missing_remotely),
+                    list(result.missing_locally)
+                )
+                
                 # Update playlist display
                 self.update_playlist_item(
                     playlist_path,
@@ -404,7 +464,7 @@ class SyncPage(BasePage):
                 )
                 
             except Exception as e:
-                print(f"Error analyzing {playlist_path}: {e}")
+                logging.error(f"Error analyzing {playlist_path}: {e}")
                 continue
                 
         # Complete
@@ -419,27 +479,16 @@ class SyncPage(BasePage):
             self.status_label.setText(f"Comparing files... {progress}%")
         QApplication.processEvents()
             
-    def update_playlist_item(self, playlist_path: Path, missing_remote: int = None, missing_local: int = None):
-        """Update existing playlist item with sync status"""
-        display_name = playlist_path.name
-        if missing_remote is not None and missing_local is not None:
-            display_name = f"{playlist_path.name} ({missing_remote}, {missing_local})"
-        
-        # Find existing item
-        for i in range(self.playlist_list.count()):
-            item = self.playlist_list.item(i)
-            if Path(item.data(Qt.ItemDataRole.UserRole)) == playlist_path:
-                item.setText(display_name)
-                return
-                
-        # If not found, add new item (shouldn't happen normally)
-        item = QListWidgetItem(display_name)
-        item.setData(Qt.ItemDataRole.UserRole, str(playlist_path))
-        self.playlist_list.addItem(item)
-        
     def on_comparison_complete(self, result):
         """Handle comparison completion"""
         self.progress_bar.setVisible(False)
+        
+        # Cache the results
+        self.analysis_cache.store_result(
+            self.current_playlist,
+            list(result.missing_remotely),
+            list(result.missing_locally)
+        )
         
         # Update missing remotely list
         self.missing_remote_list.clear()
@@ -499,7 +548,7 @@ class SyncPage(BasePage):
                 return
                 
             self.status_label.setText(f"Copying {len(files)} files to remote...")
-                
+            
             # Setup sync operation
             self.sync_ops = SyncOperations(
                 self.ssh_handler,
@@ -531,7 +580,7 @@ class SyncPage(BasePage):
                 return
             
             self.status_label.setText(f"Deleting {len(files)} local files...")
-                
+            
             self.sync_ops = SyncOperations(
                 self.ssh_handler,
                 self.backup_manager,
@@ -557,7 +606,7 @@ class SyncPage(BasePage):
                 return
                 
             self.status_label.setText(f"Copying {len(files)} files from remote...")
-                
+            
             self.sync_ops = SyncOperations(
                 self.ssh_handler,
                 self.backup_manager,
@@ -587,7 +636,7 @@ class SyncPage(BasePage):
                 return
             
             self.status_label.setText(f"Deleting {len(files)} remote files...")
-                
+            
             self.sync_ops = SyncOperations(
                 self.ssh_handler,
                 self.backup_manager,
@@ -615,6 +664,9 @@ class SyncPage(BasePage):
             
     def on_sync_complete(self):
         """Handle sync completion"""
+        # Clear cache for this playlist since files have changed
+        self.analysis_cache.clear_result(self.current_playlist)
+        
         self.progress_bar.setVisible(False)
         
         # Show success message
