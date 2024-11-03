@@ -1,241 +1,163 @@
-# test_playlist_manager.py
-from PyQt6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
-                            QTableWidget, QTableWidgetItem, QLabel, QPushButton,
-                            QHeaderView, QLineEdit)
-from PyQt6.QtCore import Qt, QTimer
-from PyQt6.QtGui import QFont
-import win32gui
+import unittest
 from pathlib import Path
+import tempfile
+import shutil
+import os
 from core.matching.song_matcher import SongMatcher
-from utils.m3u.parser import read_m3u
+from core.playlist.operations import find_missing_files, validate_playlist, clean_playlist
+from utils.m3u.parser import read_m3u, write_m3u
+from .conftest import get_playlist_dir
 
-class PlaylistManagerTest(QMainWindow):
-    def __init__(self):
-        super().__init__()
+class TestPlaylistOperations(unittest.TestCase):
+    def setUp(self):
+        """Set up test environment"""
         self.matcher = SongMatcher()
-        self.playlists_dir = Path(r"D:\Music\Dopamine\Playlists")
-        self.music_dir = Path(r"E:\Albums")
+        self.playlists_dir = get_playlist_dir()
+        self.temp_dir = Path(tempfile.mkdtemp())
         
-        # Window setup
-        self.setWindowTitle("Playlist Manager (Test Mode)")
-        self.setGeometry(100, 100, 1200, 800)
-        self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint)
+        # Find test playlists
+        self.test_playlists = list(self.playlists_dir.glob("*.m3u"))[:3]
         
-        # Main widget and layout
-        main_widget = QWidget()
-        self.setCentralWidget(main_widget)
-        layout = QVBoxLayout(main_widget)
-        
-        # Test controls
-        test_controls = QWidget()
-        test_layout = QHBoxLayout(test_controls)
-        
-        # Manual refresh button
-        refresh_btn = QPushButton("Refresh")
-        refresh_btn.clicked.connect(self.refresh_playlists)
-        test_layout.addWidget(refresh_btn)
-        
-        # Manual song input
-        self.test_input = QLineEdit()
-        self.test_input.setPlaceholderText("Enter artist - title to test")
-        test_layout.addWidget(self.test_input)
-        
-        test_btn = QPushButton("Test Song")
-        test_btn.clicked.connect(self.test_current_song)
-        test_layout.addWidget(test_btn)
-        
-        layout.addWidget(test_controls)
-        
-        # Current song info
-        self.song_info = QLabel()
-        self.song_info.setFont(QFont("Segoe UI", 12))
-        layout.addWidget(self.song_info)
-        
-        # Playlists table
-        self.playlists_table = QTableWidget()
-        self.playlists_table.setColumnCount(4)
-        self.playlists_table.setHorizontalHeaderLabels([
-            "Playlist", "Tracks", "Has Current", "Actions"
-        ])
-        self.playlists_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        layout.addWidget(self.playlists_table)
-        
-        # Update timer for window title checking
-        self.update_timer = QTimer()
-        self.update_timer.timeout.connect(self.check_current_song)
-        self.update_timer.start(1000)  # Check every second
-        
-        self.current_song = None
-        self.refresh_playlists()
-        self.show()  # Start visible in test mode
+        if not self.test_playlists:
+            self.skipTest("No M3U files found in playlist directory")
+            
+        print(f"\nFound {len(self.test_playlists)} test playlists:")
+        for playlist in self.test_playlists:
+            print(f"- {playlist.name}")
+            
+    def tearDown(self):
+        """Clean up test environment"""
+        if self.temp_dir.exists():
+            shutil.rmtree(self.temp_dir)
 
-    def test_current_song(self):
-        """Test with manually entered song"""
-        test_title = self.test_input.text()
-        if " - " in test_title:
-            parsed = self.matcher.parse_window_title(test_title)
-            if parsed:
-                artist, title = parsed
-                self.song_info.setText(f"Test Mode: {artist} - {title}")
-                self.current_song = parsed
-                
-                # Find matching files and playlists
-                files, playlists = self.matcher.find_matches(
-                    title=title,
-                    artist=artist,
-                    music_dir=str(self.music_dir),
-                    playlists_dir=str(self.playlists_dir)
-                )
-                
-                # Update "Has Current" column
-                self._update_has_current_column(playlists)
-
-    def check_current_song(self):
-        """Check currently playing song and update UI"""
-        try:
-            window_title = win32gui.GetWindowText(win32gui.GetForegroundWindow())
-            parsed = self.matcher.parse_window_title(window_title)
+    def test_playlist_reading(self):
+        """Test reading playlist files"""
+        for playlist in self.test_playlists:
+            print(f"\nReading playlist: {playlist.name}")
+            paths = read_m3u(str(playlist))
             
-            if parsed and (parsed != self.current_song):
-                self.current_song = parsed
-                artist, title = parsed
-                self.song_info.setText(f"Current: {artist} - {title}")
-                
-                # Find matching files and playlists
-                files, playlists = self.matcher.find_matches(
-                    title=title,
-                    artist=artist,
-                    music_dir=str(self.music_dir),
-                    playlists_dir=str(self.playlists_dir)
-                )
-                
-                # Update "Has Current" column
-                self._update_has_current_column(playlists)
-                    
-        except Exception as e:
-            print(f"Error checking current song: {e}")
+            self.assertIsNotNone(paths)
+            self.assertIsInstance(paths, list)
+            print(f"Found {len(paths)} entries")
+            
+            # Show sample of entries
+            for path in paths[:3]:
+                print(f"- {Path(path).name}")
+            if len(paths) > 3:
+                print("...")
 
-    def _update_has_current_column(self, playlists):
-        """Update the Has Current column with consistent indicators"""
-        for row in range(self.playlists_table.rowCount()):
-            playlist_name = self.playlists_table.item(row, 0).text()
-            # Using "Yes"/"No" instead of Unicode characters
-            has_current = QTableWidgetItem("Yes" if playlist_name in playlists else "No")
-            has_current.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-            has_current.setFlags(has_current.flags() & ~Qt.ItemFlag.ItemIsEditable)
-            self.playlists_table.setItem(row, 2, has_current)
+    def test_playlist_validation(self):
+        """Test playlist validation features"""
+        for playlist in self.test_playlists:
+            print(f"\nValidating playlist: {playlist.name}")
+            paths = read_m3u(str(playlist))
+            
+            # Test missing files detection
+            missing = find_missing_files(paths)
+            print(f"Missing files: {len(missing)}")
+            for line_num, path in missing[:3]:
+                print(f"- Line {line_num}: {Path(path).name}")
+            
+            # Test validation
+            errors = validate_playlist(str(playlist), paths)
+            print(f"Validation errors: {len(errors)}")
+            for error in errors[:3]:
+                print(f"- {error}")
 
-    def refresh_playlists(self):
-        """Update the playlists table"""
-        self.playlists_table.setRowCount(0)
+    def test_playlist_cleaning(self):
+        """Test playlist cleaning operations"""
+        for playlist in self.test_playlists:
+            print(f"\nCleaning playlist: {playlist.name}")
+            paths = read_m3u(str(playlist))
+            
+            # Create test playlist with duplicates
+            test_playlist = self.temp_dir / playlist.name
+            with open(test_playlist, 'w', encoding='utf-8') as f:
+                # Add some paths twice
+                for path in paths:
+                    f.write(f"{path}\n")
+                    f.write(f"{path}\n")  # Duplicate
+                f.write("\n")  # Empty line
+            
+            # Read and clean
+            dirty_paths = read_m3u(str(test_playlist))
+            cleaned_paths = clean_playlist(dirty_paths)
+            
+            print(f"Original entries: {len(dirty_paths)}")
+            print(f"After cleaning: {len(cleaned_paths)}")
+            print(f"Removed: {len(dirty_paths) - len(cleaned_paths)} entries")
+            
+            # Verify no duplicates remain
+            self.assertEqual(len(cleaned_paths), len(set(cleaned_paths)))
+
+    def test_song_matching(self):
+        """Test song matching in playlists"""
+        # Find a test file from first playlist
+        if not self.test_playlists:
+            self.skipTest("No playlists available")
+            
+        paths = read_m3u(str(self.test_playlists[0]))
+        if not paths:
+            self.skipTest("Empty playlist")
+            
+        test_path = Path(paths[0])
+        if not test_path.exists():
+            self.skipTest("No valid files in playlist")
+            
+        print(f"\nTesting with file: {test_path.name}")
         
-        for playlist_path in sorted(self.playlists_dir.glob("*.m3u")):
-            row = self.playlists_table.rowCount()
-            self.playlists_table.insertRow(row)
+        # Try to format as window title
+        title_parts = test_path.stem.split(" - ", 1)
+        if len(title_parts) == 2:
+            artist, title = title_parts
+            window_title = f"{artist} - {title}"
+            print(f"Testing window title: {window_title}")
             
-            # Playlist name
-            name_item = QTableWidgetItem(playlist_path.name)
-            name_item.setFlags(name_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-            self.playlists_table.setItem(row, 0, name_item)
+            # Find matches
+            matches, playlists = self.matcher.find_matches_from_window_title(
+                window_title,
+                str(test_path.parent),
+                str(self.playlists_dir)
+            )
             
-            # Track count
-            try:
-                tracks = read_m3u(str(playlist_path))
-                count_item = QTableWidgetItem(str(len(tracks)))
-                count_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-                count_item.setFlags(count_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-                self.playlists_table.setItem(row, 1, count_item)
-            except:
-                self.playlists_table.setItem(row, 1, QTableWidgetItem("Error"))
+            self.assertGreater(len(matches), 0, "Should find at least one match")
+            print(f"\nFound {len(matches)} matching files in {len(playlists)} playlists")
             
-            # Has current (will be updated in check_current_song)
-            has_current = QTableWidgetItem("No")  # Default to "No"
-            has_current.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-            self.playlists_table.setItem(row, 2, has_current)
-            
-            # Actions
-            actions_widget = QWidget()
-            actions_layout = QHBoxLayout(actions_widget)
-            actions_layout.setContentsMargins(4, 4, 4, 4)
-            
-            add_btn = QPushButton("Add")
-            add_btn.clicked.connect(lambda checked, p=playlist_path: self.add_to_playlist(p))
-            remove_btn = QPushButton("Remove")
-            remove_btn.clicked.connect(lambda checked, p=playlist_path: self.remove_from_playlist(p))
-            
-            actions_layout.addWidget(add_btn)
-            actions_layout.addWidget(remove_btn)
-            self.playlists_table.setCellWidget(row, 3, actions_widget)
+            for playlist in playlists:
+                print(f"- Present in: {playlist}")
 
-    def add_to_playlist(self, playlist_path):
-        """Add current song to playlist"""
-        if not self.current_song:
-            return
+    def test_playlist_modification(self):
+        """Test modifying playlist contents"""
+        if not self.test_playlists:
+            self.skipTest("No test playlists")
             
-        artist, title = self.current_song
-        files, _ = self.matcher.find_matches(
-            title=title,
-            artist=artist,
-            music_dir=str(self.music_dir)
-        )
+        source_playlist = self.test_playlists[0]
+        test_playlist = self.temp_dir / "test.m3u"
         
-        if files:
-            try:
-                current_paths = read_m3u(str(playlist_path))
-                file_str = str(files[0])
-                
-                if file_str not in current_paths:
-                    current_paths.append(file_str)
-                    with open(playlist_path, 'w', encoding='utf-8') as f:
-                        for path in current_paths:
-                            f.write(f"{path}\n")
-                    
-                self.refresh_playlists()
-                
-            except Exception as e:
-                print(f"Error adding to playlist: {e}")
-
-    def remove_from_playlist(self, playlist_path):
-        """Remove current song from playlist"""
-        if not self.current_song:
-            return
-            
-        artist, title = self.current_song
-        files, _ = self.matcher.find_matches(
-            title=title,
-            artist=artist,
-            music_dir=str(self.music_dir)
-        )
+        # Copy playlist for testing
+        shutil.copy2(source_playlist, test_playlist)
         
-        if files:
-            try:
-                current_paths = read_m3u(str(playlist_path))
-                file_str = str(files[0])
-                
-                if file_str in current_paths:
-                    current_paths.remove(file_str)
-                    with open(playlist_path, 'w', encoding='utf-8') as f:
-                        for path in current_paths:
-                            f.write(f"{path}\n")
-                    
-                self.refresh_playlists()
-                
-            except Exception as e:
-                print(f"Error removing from playlist: {e}")
+        print(f"\nTesting modifications on: {test_playlist.name}")
+        
+        # Read original content
+        original_paths = read_m3u(str(test_playlist))
+        print(f"Original entries: {len(original_paths)}")
+        
+        # Test removal
+        if original_paths:
+            modified_paths = original_paths[1:]
+            write_m3u(str(test_playlist), modified_paths)
+            
+            # Verify
+            new_paths = read_m3u(str(test_playlist))
+            self.assertEqual(len(new_paths), len(original_paths) - 1)
+            print(f"After removal: {len(new_paths)} entries")
+            
+            # Test addition
+            write_m3u(str(test_playlist), original_paths)
+            final_paths = read_m3u(str(test_playlist))
+            self.assertEqual(len(final_paths), len(original_paths))
+            print(f"After restoring: {len(final_paths)} entries")
 
-def main():
-    # Create the application
-    app = QApplication(sys.argv)
-    
-    # Set up the window style to match Windows 10
-    app.setStyle('Fusion')
-    
-    # Create and show the window
-    window = PlaylistManagerTest()
-    
-    # Start the event loop
-    sys.exit(app.exec())
-
-if __name__ == "__main__":
-    import sys
-    main()
+if __name__ == '__main__':
+    unittest.main()

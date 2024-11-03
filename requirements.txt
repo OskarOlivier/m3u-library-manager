@@ -1,14 +1,18 @@
 # Core dependencies
-mutagen>=1.45.1
-numpy>=1.24.0
-colorama>=0.4.6
+mutagen>=1.46.0    # MP3 and ID3 tag handling
+numpy>=1.24.0      # Audio analysis for BPM detection
+pathlib>=1.0.1     # Path manipulation utilities
 
-# GUI dependencies
-PyQt6>=6.4.0
+# GUI and Interface
+PyQt6>=6.4.0       # Main GUI framework
+keyboard>=0.13.5   # Global hotkey support
+
+# Windows-specific
+pywin32>=306       # Windows API access for window title detection
+psutil>=5.9.0      # Process management for Dopamine detection
 
 # Development dependencies
-pytest>=7.3.1
-black>=22.3.0
-isort>=5.10.1
-flake8>=4.0.1
-mypy>=0.981
+pytest>=7.3.1      # Testing framework
+pytest-cov>=4.1.0  # Test coverage reporting
+black>=23.3.0      # Code formatting
+pylint>=2.17.0     # Code analysis

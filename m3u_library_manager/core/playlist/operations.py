@@ -1,56 +1,50 @@
-from typing import List, Tuple, Optional
 from pathlib import Path
-import os
+from typing import List, Tuple, Optional
+from utils.m3u.parser import read_m3u, write_m3u
 
-def find_missing_files(playlist_paths: List[str]) -> List[Tuple[int, str]]:
-    """
-    Find missing files in playlist.
-    Returns list of (line_number, path) tuples.
-    """
-    missing = []
-    for i, path in enumerate(playlist_paths, 1):
-        if not os.path.exists(path):
-            missing.append((i, path))
-    return missing
+class PlaylistOperations:
+    """Handles playlist file operations"""
+    
+    @staticmethod
+    def add_song_to_playlist(playlist_path: Path, song_path: str) -> bool:
+        """Add a song to playlist if not present"""
+        try:
+            current_paths = read_m3u(str(playlist_path))
+            if song_path not in current_paths:
+                current_paths.append(song_path)
+                write_m3u(str(playlist_path), current_paths)
+            return True
+        except Exception as e:
+            print(f"Error adding to playlist: {e}")
+            return False
 
-def validate_playlist(file_path: str, paths: List[str]) -> List[str]:
-    """
-    Validate playlist entries and print issues.
-    Returns list of error messages.
-    """
-    errors = []
-    base_dir = os.path.dirname(os.path.abspath(file_path))
-    
-    for i, path in enumerate(paths, 1):
-        # Check if path exists
-        if not os.path.exists(path):
-            errors.append(f"Line {i}: File not found: {path}")
-            continue
-            
-        # Check if it's an MP3
-        if not path.lower().endswith('.mp3'):
-            errors.append(f"Line {i}: Not an MP3 file: {path}")
-            
-        # Check absolute/relative path
-        if not os.path.isabs(path):
-            abs_path = os.path.join(base_dir, path)
-            if not os.path.exists(abs_path):
-                errors.append(f"Line {i}: Invalid relative path: {path}")
-    
-    return errors
+    @staticmethod
+    def remove_song_from_playlist(playlist_path: Path, song_path: str) -> bool:
+        """Remove a song from playlist if present"""
+        try:
+            current_paths = read_m3u(str(playlist_path))
+            if song_path in current_paths:
+                current_paths.remove(song_path)
+                write_m3u(str(playlist_path), current_paths)
+            return True
+        except Exception as e:
+            print(f"Error removing from playlist: {e}")
+            return False
 
-def clean_playlist(paths: List[str]) -> List[str]:
-    """
-    Clean playlist by removing duplicates and empty lines.
-    Preserves order of first occurrence.
-    """
-    seen = set()
-    cleaned = []
-    
-    for path in paths:
-        path = path.strip()
-        if path and path not in seen:
-            cleaned.append(path)
-            seen.add(path)
-    
-    return cleaned
+    @staticmethod
+    def get_track_count(playlist_path: Path) -> Optional[int]:
+        """Get number of tracks in playlist"""
+        try:
+            tracks = read_m3u(str(playlist_path))
+            return len(tracks)
+        except Exception:
+            return None
+
+    @staticmethod
+    def contains_song(playlist_path: Path, song_path: str) -> bool:
+        """Check if playlist contains specific song"""
+        try:
+            current_paths = read_m3u(str(playlist_path))
+            return song_path in current_paths
+        except Exception:
+            return False
