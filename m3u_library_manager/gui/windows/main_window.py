@@ -1,11 +1,13 @@
+# gui/windows/main_window.py
+
 from PyQt6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
-                           QLabel, QStackedWidget)
+                           QLabel, QStackedWidget, QApplication)
 from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QFont, QColor
+from PyQt6.QtGui import QFont
 from pathlib import Path
 
 from .pages.curation_page import CurationPage
-from .pages.sync_page import SyncPage
+from .pages.sync_page import SyncPage  # This import should now work
 from .pages.explore_page import ExplorePage
 
 class NavigationButton(QLabel):
@@ -51,6 +53,23 @@ class MainWindow(QMainWindow):
         super().__init__(flags=Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint)
         self.oldPos = None
         self.setup_ui()
+        self.center_on_screen()
+        
+    def center_on_screen(self):
+        """Center window on primary screen"""
+        # Get the primary screen's geometry
+        screen = QApplication.primaryScreen()
+        screen_geometry = screen.availableGeometry()
+        
+        # Calculate center point
+        center_point = screen_geometry.center()
+        
+        # Get window geometry
+        window_geometry = self.frameGeometry()
+        window_geometry.moveCenter(center_point)
+        
+        # Move window to centered position
+        self.move(window_geometry.topLeft())
         
     def setup_ui(self):
         self.setWindowTitle("M3U Library Manager")

@@ -1,14 +1,16 @@
 # gui/windows/pages/sync_page.py
+
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
                            QPushButton, QListWidget, QFrame, QProgressBar,
-                           QMessageBox, QApplication)
-from PyQt6.QtCore import Qt
+                           QMessageBox, QApplication, QListWidgetItem)
+from PyQt6.QtCore import Qt, QThread
 from PyQt6.QtGui import QFont
 from pathlib import Path
 from typing import Set, Optional
+import asyncio
 
 from . import BasePage
-from gui.dialogs.credentials_dialog import CredentialsDialog, SSHCredentialsResult
+from gui.dialogs.credentials_dialog import PasswordDialog, SSHCredentialsResult
 from gui.workers.sync_workers import ComparisonWorker, SyncWorker
 from gui.widgets.sync_widgets import FileListWidget
 from core.sync.ssh_handler import SSHHandler, SSHCredentials
@@ -18,10 +20,16 @@ from core.sync.backup_manager import BackupManager
 from utils.logging.sync_logger import SyncLogger
 
 class SyncPage(BasePage):
+    """Sync page implementation"""
     def __init__(self):
         self.local_base = Path(r"E:\Albums")
         self.backup_dir = Path(r"D:\Music\Dopamine\Playlists\backups")
         self.playlists_dir = Path(r"D:\Music\Dopamine\Playlists")
+        
+        # Fixed SSH credentials
+        self.SSH_HOST = "192.168.178.43"
+        self.SSH_USERNAME = "pi"
+        self.SSH_REMOTE_PATH = "/media/CHIA/Music"
         
         self.ssh_handler = None
         self.file_comparator = None
@@ -124,6 +132,11 @@ class SyncPage(BasePage):
         playlist_label.setFont(QFont("Segoe UI", 11))
         playlist_label.setStyleSheet("color: white;")
         header.addWidget(playlist_label)
+        
+        # Add Analyze All button
+        self.analyze_all_btn = QPushButton("Analyze All")
+        self.analyze_all_btn.clicked.connect(self.on_analyze_all_clicked)
+        header.addWidget(self.analyze_all_btn)
         
         # Add playlist count label
         self.playlist_count_label = QLabel()
@@ -260,24 +273,70 @@ class SyncPage(BasePage):
         self.playlist_list.clear()
         playlists = sorted(p for p in self.playlists_dir.glob("*.m3u") 
                          if p.name != "Love.bak.m3u")  # Skip backup playlist
+        
         for playlist in playlists:
-            self.playlist_list.addItem(playlist.name)
+            self.add_playlist_item(playlist)
             
         # Update count
         self.playlist_count_label.setText(f"{len(playlists)} playlists")
+        
+    def add_playlist_item(self, playlist_path: Path, missing_remote: int = None, missing_local: int = None):
+        """Add playlist item with optional sync status"""
+        display_name = playlist_path.name
+        if missing_remote is not None and missing_local is not None:
+            display_name = f"{playlist_path.name} ({missing_remote}, {missing_local})"
             
+        item = QListWidgetItem(display_name)
+        item.setData(Qt.ItemDataRole.UserRole, str(playlist_path))
+        self.playlist_list.addItem(item)
+        
     def on_playlist_selected(self, item):
         """Handle playlist selection"""
-        self.current_playlist = self.playlists_dir / item.text()
+        self.current_playlist = Path(item.data(Qt.ItemDataRole.UserRole))
         # Clear previous results
         self.missing_remote_list.clear()
         self.missing_local_list.clear()
         self.remote_count_label.setText("")
         self.local_count_label.setText("")
-        self.status_label.setText(f"Selected: {item.text()}")
+        self.status_label.setText(f"Selected: {self.current_playlist.name}")
         
         # Disable sync buttons until analysis is done
         self.set_sync_buttons_enabled(False)
+        
+    def get_ssh_connection(self) -> bool:
+        """Establish SSH connection if needed"""
+        if self.ssh_handler is None:
+            # Show password dialog if needed
+            if not SSHCredentials._cached_password:
+                dialog = PasswordDialog(self)
+                result = dialog.get_credentials()
+                if not result.accepted:
+                    return False
+                password = result.password
+            else:
+                password = SSHCredentials._cached_password
+                
+            # Setup handlers
+            credentials = SSHCredentials(
+                host=self.SSH_HOST,
+                username=self.SSH_USERNAME,
+                password=password,
+                remote_path=self.SSH_REMOTE_PATH
+            )
+            
+            self.ssh_handler = SSHHandler(credentials)
+            
+            # Test connection
+            success, error = self.ssh_handler.test_connection()
+            if not success:
+                self.status_label.setText("Connection failed!")
+                QMessageBox.critical(self, "Connection Error", f"Failed to connect: {error}")
+                return False
+                
+            # Setup comparator
+            self.file_comparator = FileComparator(self.ssh_handler)
+            
+        return True
             
     def on_analyze_clicked(self):
         """Handle analyze button click"""
@@ -285,66 +344,97 @@ class SyncPage(BasePage):
             QMessageBox.warning(self, "Warning", "Please select a playlist first.")
             return
             
-        # Create dialog with pre-filled credentials
-        dialog = CredentialsDialog(self)
-        dialog.host_input.setText("192.168.178.43")  # Updated host
-        dialog.username_input.setText("pi")
-        dialog.remote_path_input.setText("/media/CHIA/Music")
-        
-        result = dialog.get_credentials()
-        if not result.accepted:
+        if not self.get_ssh_connection():
             return
             
         # Update status
-        self.status_label.setText("Connecting to remote host...")
-        QApplication.processEvents()  # Force UI update
-            
-        # Setup handlers
-        self.ssh_handler = SSHHandler(SSHCredentials(
-            host=result.host,
-            username=result.username,
-            password=result.password,
-            remote_path=result.remote_path
-        ))
-        
-        # Test connection
-        self.status_label.setText("Testing SSH connection...")
+        self.status_label.setText("Comparing files...")
         QApplication.processEvents()
-        success, error = self.ssh_handler.test_connection()
-        if not success:
-            self.status_label.setText("Connection failed!")
-            QMessageBox.critical(self, "Connection Error", f"Failed to connect: {error}")
-            return
-            
-        self.status_label.setText("Connected. Setting up comparison...")
-        QApplication.processEvents()
-            
-        # Setup comparator
-        self.file_comparator = FileComparator(self.ssh_handler)
         
         # Start comparison
         self.progress_bar.setVisible(True)
         self.progress_bar.setValue(0)
-        self.status_label.setText("Starting file comparison...")
-        QApplication.processEvents()
         
         self.comparison_worker = ComparisonWorker(
             self.file_comparator,
             self.current_playlist,
             self.local_base,
-            result.remote_path
+            self.SSH_REMOTE_PATH
         )
+        
         self.comparison_worker.progress.connect(self.on_comparison_progress)
         self.comparison_worker.finished.connect(self.on_comparison_complete)
         self.comparison_worker.error.connect(self.on_comparison_error)
         self.comparison_worker.start()
         
-    def on_comparison_progress(self, progress):
+    def on_analyze_all_clicked(self):
+        """Handle analyze all button click"""
+        if not self.get_ssh_connection():
+            return
+            
+        self.status_label.setText("Analyzing all playlists...")
+        self.progress_bar.setVisible(True)
+        self.progress_bar.setValue(0)
+        QApplication.processEvents()
+        
+        total_playlists = self.playlist_list.count()
+        for i in range(total_playlists):
+            item = self.playlist_list.item(i)
+            playlist_path = Path(item.data(Qt.ItemDataRole.UserRole))
+            
+            try:
+                # Update progress
+                self.progress_bar.setValue(int((i / total_playlists) * 100))
+                self.status_label.setText(f"Analyzing {playlist_path.name}...")
+                QApplication.processEvents()
+                
+                # Run comparison
+                result = asyncio.run(self.file_comparator.compare_locations(
+                    playlist_path,
+                    self.local_base,
+                    self.SSH_REMOTE_PATH
+                ))
+                
+                # Update playlist display
+                self.update_playlist_item(
+                    playlist_path,
+                    len(result.missing_remotely),
+                    len(result.missing_locally)
+                )
+                
+            except Exception as e:
+                print(f"Error analyzing {playlist_path}: {e}")
+                continue
+                
+        # Complete
+        self.progress_bar.setValue(100)
+        self.status_label.setText("Analysis complete")
+        self.progress_bar.setVisible(False)
+        
+    def on_comparison_progress(self, progress: int):
         """Handle comparison progress updates"""
         self.progress_bar.setValue(progress)
         if progress % 10 == 0:  # Update status every 10%
-            self.status_label.setText(f"Comparing files... {progress:.0f}%")
+            self.status_label.setText(f"Comparing files... {progress}%")
         QApplication.processEvents()
+            
+    def update_playlist_item(self, playlist_path: Path, missing_remote: int = None, missing_local: int = None):
+        """Update existing playlist item with sync status"""
+        display_name = playlist_path.name
+        if missing_remote is not None and missing_local is not None:
+            display_name = f"{playlist_path.name} ({missing_remote}, {missing_local})"
+        
+        # Find existing item
+        for i in range(self.playlist_list.count()):
+            item = self.playlist_list.item(i)
+            if Path(item.data(Qt.ItemDataRole.UserRole)) == playlist_path:
+                item.setText(display_name)
+                return
+                
+        # If not found, add new item (shouldn't happen normally)
+        item = QListWidgetItem(display_name)
+        item.setData(Qt.ItemDataRole.UserRole, str(playlist_path))
+        self.playlist_list.addItem(item)
         
     def on_comparison_complete(self, result):
         """Handle comparison completion"""
@@ -374,13 +464,20 @@ class SyncPage(BasePage):
                 f"Analysis complete. Found {total_missing} differences between locations."
             )
             
+        # Update playlist item with counts
+        self.update_playlist_item(
+            self.current_playlist,
+            len(result.missing_remotely),
+            len(result.missing_locally)
+        )
+                
         # Log results
         self.sync_logger.log_comparison(
             self.current_playlist,
             result.missing_remotely,
             result.missing_locally
         )
-        
+            
     def on_comparison_error(self, error_msg):
         """Handle comparison error"""
         self.progress_bar.setVisible(False)

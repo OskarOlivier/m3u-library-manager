@@ -1,25 +1,25 @@
 # gui/dialogs/credentials_dialog.py
+
 from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel, 
                            QLineEdit, QPushButton, QFormLayout)
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QFont
 from dataclasses import dataclass
 
+__all__ = ['PasswordDialog', 'SSHCredentialsResult']  # Export these names
+
 @dataclass
 class SSHCredentialsResult:
     """Stores the result of credential input"""
     accepted: bool
-    host: str = ""
-    username: str = ""
     password: str = ""
-    remote_path: str = ""
 
-class CredentialsDialog(QDialog):
-    """Dialog for SSH credential input"""
+class PasswordDialog(QDialog):
+    """Dialog for SSH password input"""
     
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("SSH Connection Details")
+        self.setWindowTitle("SSH Password")
         self.setFixedWidth(400)
         self.setup_ui()
         
@@ -28,31 +28,18 @@ class CredentialsDialog(QDialog):
         layout.setSpacing(16)
         layout.setContentsMargins(24, 24, 24, 24)
         
-        # Form layout for inputs
-        form = QFormLayout()
-        form.setSpacing(12)
-        
-        # Host input
-        self.host_input = QLineEdit()
-        self.host_input.setPlaceholderText("e.g., example.com or 192.168.1.100")
-        form.addRow("Host:", self.host_input)
-        
-        # Username input
-        self.username_input = QLineEdit()
-        self.username_input.setPlaceholderText("SSH username")
-        form.addRow("Username:", self.username_input)
+        # Info label
+        info_label = QLabel("Enter password for pi@192.168.178.43")
+        info_label.setFont(QFont("Segoe UI", 11))
+        layout.addWidget(info_label)
         
         # Password input
         self.password_input = QLineEdit()
         self.password_input.setEchoMode(QLineEdit.EchoMode.Password)
         self.password_input.setPlaceholderText("SSH password")
+        
+        form = QFormLayout()
         form.addRow("Password:", self.password_input)
-        
-        # Remote path input
-        self.remote_path_input = QLineEdit()
-        self.remote_path_input.setPlaceholderText("e.g., /home/user/music")
-        form.addRow("Remote Path:", self.remote_path_input)
-        
         layout.addLayout(form)
         
         # Buttons
@@ -125,9 +112,6 @@ class CredentialsDialog(QDialog):
         if self.exec() == QDialog.DialogCode.Accepted:
             return SSHCredentialsResult(
                 accepted=True,
-                host=self.host_input.text().strip(),
-                username=self.username_input.text().strip(),
-                password=self.password_input.text(),
-                remote_path=self.remote_path_input.text().strip()
+                password=self.password_input.text()
             )
         return SSHCredentialsResult(accepted=False)
