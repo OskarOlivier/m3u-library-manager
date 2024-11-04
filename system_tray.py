@@ -1,14 +1,16 @@
 # system_tray.py
 
 from PyQt6.QtWidgets import QApplication, QSystemTrayIcon, QMenu
-from PyQt6.QtGui import QIcon
+from PyQt6.QtGui import QIcon, QAction
 from PyQt6.QtCore import Qt, QObject, QTimer
 import logging
 from pathlib import Path
-from gui.windows.main_window import MainWindow
 import win32gui
 import win32con
 import win32api
+import sys
+
+from gui.windows.main_window import MainWindow
 
 class WindowsHotkey:
     """Windows hotkey handler using polling approach."""
@@ -53,28 +55,34 @@ class SystemTrayApp(QObject):
     def setup_system_tray(self):
         """Initialize system tray icon and menu."""
         try:
+            # Create tray icon
             self.tray_icon = QSystemTrayIcon(self)
-            self.tray_icon.setIcon(
-                self.app.style().standardIcon(
-                    self.app.style().StandardPixmap.SP_MediaPlay
-                )
+            
+            # Use application style icon
+            icon = self.app.style().standardIcon(
+                self.app.style().StandardPixmap.SP_MediaPlay
             )
+            self.tray_icon.setIcon(icon)
             
-            # Create tray menu
-            tray_menu = QMenu()
+            # Create menu
+            menu = QMenu()
             
-            show_action = QAction("Show", self)
+            show_action = QAction("Show", menu)
             show_action.triggered.connect(self.show_window)
+            menu.addAction(show_action)
             
-            exit_action = QAction("Exit", self)
+            menu.addSeparator()
+            
+            exit_action = QAction("Exit", menu)
             exit_action.triggered.connect(self.quit_application)
+            menu.addAction(exit_action)
             
-            tray_menu.addAction(show_action)
-            tray_menu.addSeparator()
-            tray_menu.addAction(exit_action)
-            
-            self.tray_icon.setContextMenu(tray_menu)
+            # Set menu and show icon
+            self.tray_icon.setContextMenu(menu)
             self.tray_icon.show()
+            
+            # Initial tooltip
+            self.tray_icon.setToolTip("M3U Library Manager (Ctrl+Alt+F)")
             
             # Show startup message
             self.tray_icon.showMessage(
@@ -87,7 +95,7 @@ class SystemTrayApp(QObject):
         except Exception as e:
             self.logger.error(f"Error setting up system tray: {e}")
             raise
-    
+            
     def check_hotkey(self):
         """Check if hotkey is pressed."""
         try:
@@ -97,7 +105,7 @@ class SystemTrayApp(QObject):
             self.last_trigger = is_pressed
         except Exception as e:
             self.logger.error(f"Error checking hotkey: {e}")
-    
+            
     def show_window(self):
         """Show or create the main window."""
         try:
@@ -115,7 +123,7 @@ class SystemTrayApp(QObject):
                 
         except Exception as e:
             self.logger.error(f"Error showing window: {e}")
-    
+            
     def quit_application(self):
         """Clean up and quit the application."""
         try:
@@ -127,3 +135,18 @@ class SystemTrayApp(QObject):
         except Exception as e:
             self.logger.error(f"Error during application shutdown: {e}")
             self.app.quit()  # Force quit even if cleanup fails
+
+def main():
+    """Main entry point for system tray application."""
+    # Create application
+    app = QApplication(sys.argv)
+    app.setQuitOnLastWindowClosed(False)  # Keep running when window closed
+    
+    # Create system tray
+    tray_app = SystemTrayApp(app)
+    
+    # Run event loop
+    sys.exit(app.exec())
+
+if __name__ == "__main__":
+    main()

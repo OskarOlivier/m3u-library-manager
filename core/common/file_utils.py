@@ -8,6 +8,7 @@ This module breaks circular dependencies by centralizing shared functionality.
 from pathlib import Path
 from typing import Optional, Tuple, List, Set
 import re
+import os
 
 def clean_string(s: str) -> str:
     """
@@ -91,7 +92,6 @@ def find_matches_in_playlist(playlist_path: Path, file_paths: Set[Path]) -> bool
         True if any file is found in the playlist
     """
     try:
-        from utils.m3u.parser import read_m3u
         with open(playlist_path, 'r', encoding='utf-8') as f:
             playlist_content = f.read()
             

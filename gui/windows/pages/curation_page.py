@@ -8,98 +8,8 @@ from pathlib import Path
 
 from gui.windows.pages import BasePage
 from core.matching.window_handler import WindowHandler
-from core.playlist.playlist_manager import PlaylistManager
-
-class PlaylistClickHandler(QObject):
-    """Signal handler for playlist clicks"""
-    clicked = pyqtSignal(Path)
-
-class PlaylistItem(QLabel):
-    """Interactive playlist item with Windows 10 styling"""
-    def __init__(self, playlist_path: Path, track_count: int, click_handler: PlaylistClickHandler, parent=None):
-        super().__init__(parent)
-        self.playlist_path = playlist_path
-        self.click_handler = click_handler
-        self.track_count = track_count
-        self.highlighted = False
-        
-        # Create container widget
-        self.container = QFrame(self)
-        
-        # Create layout for the container
-        self.layout = QHBoxLayout(self.container)
-        self.layout.setContentsMargins(8, 8, 8, 8)
-        self.layout.setSpacing(4)
-        
-        # Create labels for playlist name and track count
-        self.name_label = QLabel(playlist_path.stem, self.container)
-        self.count_label = QLabel(str(track_count), self.container)
-        
-        # Set font for both labels
-        font = QFont("Segoe UI", 11)
-        self.name_label.setFont(font)
-        self.count_label.setFont(font)
-        
-        # Add labels to layout
-        self.layout.addWidget(self.name_label, 1)  # 1 for stretch
-        self.layout.addWidget(self.count_label)
-        
-        # Set up outer layout
-        outer_layout = QVBoxLayout(self)
-        outer_layout.setContentsMargins(4, 4, 4, 4)
-        outer_layout.addWidget(self.container)
-        
-        self.setup_ui()
-        
-    def setup_ui(self):
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setMinimumHeight(50)
-        self.update_style()
-        
-    def update_display(self):
-        """Update playlist display"""
-        try:
-            from utils.m3u.parser import read_m3u
-            self.track_count = len(read_m3u(str(self.playlist_path)))
-            self.count_label.setText(str(self.track_count))
-        except Exception:
-            self.track_count = 0
-            self.count_label.setText("0")
-        self.update_style()
-        
-    def update_style(self):
-        # Windows 10 style for container
-        container_style = f"""
-            QFrame {{
-                background-color: {("#0078D4" if self.highlighted else "#2D2D2D")};
-                border: none;
-                border-radius: 2px;
-            }}
-        """
-        
-        self.container.setStyleSheet(container_style)
-        
-        # Style for name label - Windows 10 font
-        self.name_label.setStyleSheet("""
-            QLabel {
-                color: white;
-                padding: 4px;
-            }
-        """)
-        
-        # Style for count label - Right aligned
-        self.count_label.setStyleSheet("""
-            QLabel {
-                color: white;
-                padding: 4px;
-                min-width: 40px;
-                qproperty-alignment: 'AlignRight | AlignVCenter';
-            }
-        """)
-        
-    def mousePressEvent(self, event):
-        if event.button() == Qt.MouseButton.LeftButton:
-            self.click_handler.clicked.emit(self.playlist_path)
+from core.playlist import PlaylistManager
+from gui.widgets import PlaylistItem, ClickHandler  # Updated import path
 
 class CurationPage(BasePage):
     def __init__(self):
@@ -108,7 +18,7 @@ class CurationPage(BasePage):
         self.playlist_manager = PlaylistManager(self.music_dir, self.playlists_dir)
         self.playlist_items = {}
         self.current_song = None
-        self.click_handler = PlaylistClickHandler()
+        self.click_handler = ClickHandler()
         super().__init__()
         
     def setup_ui(self):

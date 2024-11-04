@@ -1,22 +1,48 @@
 # core/playlist/playlist_manager.py
+
 from pathlib import Path
-from typing import Optional, Tuple, List
+from typing import Optional, Tuple, List, Dict
+from dataclasses import dataclass
+import logging
+
 from core.matching.song_matcher import SongMatcher
 from core.common.file_utils import search_music_directory
-from .operations import PlaylistOperations
+from core.playlist.operations import PlaylistOperations
+
+__all__ = ['PlaylistManager']
 
 class PlaylistManager:
     """Manages playlist operations and song toggling"""
     
     def __init__(self, music_dir: Path, playlists_dir: Path):
+        """
+        Initialize PlaylistManager.
+        
+        Args:
+            music_dir: Base directory for music files
+            playlists_dir: Directory containing playlists
+        """
         self.music_dir = music_dir
         self.playlists_dir = playlists_dir
         self.matcher = SongMatcher()
+        self.logger = logging.getLogger('playlist_manager')
         
-    def toggle_song_in_playlist(self, playlist_path: Path, artist: str, title: str, include: bool) -> Tuple[bool, Optional[int]]:
+    def toggle_song_in_playlist(self, 
+                              playlist_path: Path, 
+                              artist: str, 
+                              title: str, 
+                              include: bool) -> Tuple[bool, Optional[int]]:
         """
         Toggle song presence in playlist.
-        Returns (success, new_track_count)
+        
+        Args:
+            playlist_path: Path to playlist file
+            artist: Artist name
+            title: Song title
+            include: True to add, False to remove
+            
+        Returns:
+            Tuple of (success, new_track_count)
         """
         try:
             # Find matching files
@@ -27,6 +53,7 @@ class PlaylistManager:
             )
             
             if not files:
+                self.logger.warning(f"No matching files found for {artist} - {title}")
                 return False, None
                 
             file_str = str(files[0])
@@ -39,16 +66,29 @@ class PlaylistManager:
                 
             if success:
                 new_count = PlaylistOperations.get_track_count(playlist_path)
+                self.logger.info(
+                    f"Successfully {'added to' if include else 'removed from'} "
+                    f"{playlist_path.name}, new count: {new_count}"
+                )
                 return True, new_count
                 
             return False, None
             
         except Exception as e:
-            print(f"Error toggling song in playlist: {e}")
+            self.logger.error(f"Error toggling song in playlist: {e}")
             return False, None
             
     def get_song_playlists(self, artist: str, title: str) -> List[str]:
-        """Get list of playlist names containing the specified song"""
+        """
+        Get list of playlist names containing the specified song.
+        
+        Args:
+            artist: Artist name
+            title: Song title
+            
+        Returns:
+            List of playlist names containing the song
+        """
         try:
             _, playlists = self.matcher.find_matches(
                 title=title,
@@ -58,5 +98,39 @@ class PlaylistManager:
             )
             return playlists
         except Exception as e:
-            print(f"Error getting song playlists: {e}")
+            self.logger.error(f"Error getting song playlists: {e}")
             return []
+            
+    def get_all_playlists(self) -> List[Tuple[Path, int]]:
+        """
+        Get all playlists and their track counts.
+        
+        Returns:
+            List of tuples containing (playlist_path, track_count)
+        """
+        try:
+            playlists = []
+            for path in sorted(self.playlists_dir.glob("*.m3u")):
+                count = PlaylistOperations.get_track_count(path) or 0
+                playlists.append((path, count))
+            return playlists
+        except Exception as e:
+            self.logger.error(f"Error getting playlists: {e}")
+            return []
+            
+    def contains_song(self, playlist_path: Path, file_path: Path) -> bool:
+        """
+        Check if playlist contains specific song.
+        
+        Args:
+            playlist_path: Path to playlist
+            file_path: Path to song file
+            
+        Returns:
+            True if song is in playlist
+        """
+        try:
+            return PlaylistOperations.contains_song(playlist_path, str(file_path))
+        except Exception as e:
+            self.logger.error(f"Error checking song in playlist: {e}")
+            return False

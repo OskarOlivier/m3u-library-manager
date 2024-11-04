@@ -2,7 +2,7 @@
 
 from PyQt6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
                            QLabel, QStackedWidget, QApplication)
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QPoint
 from PyQt6.QtGui import QFont
 from pathlib import Path
 
@@ -55,20 +55,28 @@ class MainWindow(QMainWindow):
         self.setup_ui()
         self.center_on_screen()
         
+    def closeEvent(self, event):
+        """Handle window close event"""
+        try:
+            # Hide window instead of closing when system tray is active
+            if hasattr(self, 'system_tray') and self.system_tray.isVisible():
+                event.ignore()
+                self.hide()
+            else:
+                # Actually close the window
+                event.accept()
+        except Exception as e:
+            print(f"Error handling close event: {e}")
+            event.accept()  # Close anyway if there's an error
+
     def center_on_screen(self):
         """Center window on primary screen"""
-        # Get the primary screen's geometry
         screen = QApplication.primaryScreen()
         screen_geometry = screen.availableGeometry()
-        
-        # Calculate center point
         center_point = screen_geometry.center()
         
-        # Get window geometry
         window_geometry = self.frameGeometry()
         window_geometry.moveCenter(center_point)
-        
-        # Move window to centered position
         self.move(window_geometry.topLeft())
         
     def setup_ui(self):
@@ -102,7 +110,7 @@ class MainWindow(QMainWindow):
         
         # Close button
         close_btn = QLabel("x")
-        close_btn.setFixedSize(30, 30)  # Square button
+        close_btn.setFixedSize(30, 30)
         close_btn.setFont(QFont("Segoe UI", 14))
         close_btn.setAlignment(Qt.AlignmentFlag.AlignCenter)
         close_btn.setStyleSheet("""
@@ -116,7 +124,7 @@ class MainWindow(QMainWindow):
             }
         """)
         close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        close_btn.mousePressEvent = lambda e: self.close()
+        close_btn.mousePressEvent = lambda e: self.hide()  # Hide instead of close
         title_layout.addWidget(close_btn)
         
         header_layout.addWidget(title_bar)

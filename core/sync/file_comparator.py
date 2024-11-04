@@ -5,9 +5,8 @@ from pathlib import Path
 from typing import Dict, Set, List, Tuple, Optional, Callable
 from dataclasses import dataclass
 import tempfile
-
-from .ssh_handler import SSHHandler
 from utils.m3u.parser import read_m3u
+from .ssh_handler import SSHHandler
 
 @dataclass
 class ComparisonResult:
@@ -23,24 +22,34 @@ class FileComparator:
         self.ssh = ssh_handler
         self.logger = logging.getLogger('file_comparator')
         
-    def _normalize_local_path(self, path: str) -> str:
-        """Convert local path to normalized format"""
-        # Remove E:\Albums\ prefix and convert to forward slashes
-        normalized = path.replace('E:\\Albums\\', '').replace('\\', '/')
-        return normalized
+    def _normalize_path(self, path: str) -> str:
+        """Convert path to normalized format for comparison"""
+        # Remove base path prefix and convert to forward slashes
+        path = path.replace('E:\\Albums\\', '').replace('\\', '/')
+        return path.lower()  # Case-insensitive comparison
         
-    def _get_normalized_paths(self, playlist_path: Path) -> Set[str]:
+    def _get_normalized_paths(self, playlist_path: Path, is_remote: bool = False) -> Set[str]:
         """Get normalized paths from playlist file"""
         try:
             self.logger.info(f"Reading playlist: {playlist_path}")
             paths = read_m3u(str(playlist_path))
+            
+            # Sort paths for easier comparison
+            paths.sort()
+            
+            # Normalize paths
             normalized_paths = {
-                self._normalize_local_path(p)
+                self._normalize_path(p)
                 for p in paths 
                 if p.lower().endswith('.mp3')
             }
-            self.logger.info(f"Found {len(normalized_paths)} MP3 files in playlist")
+            
+            count = len(normalized_paths)
+            location = "remote" if is_remote else "local"
+            self.logger.info(f"Found {count} MP3 files in {location} playlist")
+            
             return normalized_paths
+            
         except Exception as e:
             self.logger.error(f"Error reading playlist {playlist_path}: {e}")
             raise
@@ -76,7 +85,7 @@ class FileComparator:
             try:
                 self.logger.info(f"Copying remote playlist: {remote_playlist_path}")
                 self.ssh.copy_from_remote(remote_playlist_path, temp_playlist)
-                remote_paths = self._get_normalized_paths(temp_playlist)
+                remote_paths = self._get_normalized_paths(temp_playlist, is_remote=True)
             finally:
                 if temp_playlist.exists():
                     temp_playlist.unlink()
@@ -84,10 +93,18 @@ class FileComparator:
             if progress_callback:
                 progress_callback(50)
             
-            # Convert paths to Path objects for return value
-            missing_remotely = {Path('E:/Albums').joinpath(p) for p in local_paths - remote_paths}
-            missing_locally = {Path('E:/Albums').joinpath(p) for p in remote_paths - local_paths}
+            # Compare paths
+            missing_remotely = {
+                Path('E:/Albums').joinpath(p.replace('/', '\\'))
+                for p in local_paths - remote_paths
+            }
             
+            missing_locally = {
+                Path('E:/Albums').joinpath(p.replace('/', '\\'))
+                for p in remote_paths - local_paths
+            }
+            
+            # Log results
             self.logger.info(f"Found {len(missing_remotely)} files missing remotely")
             self.logger.info(f"Found {len(missing_locally)} files missing locally")
             

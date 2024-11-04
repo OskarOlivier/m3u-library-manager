@@ -1,4 +1,4 @@
-# gui/windows/playlist_manager.py
+# gui/widgets/playlist_widgets.py
 
 from PyQt6.QtWidgets import QLabel, QHBoxLayout, QSpacerItem, QSizePolicy, QWidget
 from PyQt6.QtCore import Qt, pyqtSignal, QObject
@@ -26,32 +26,40 @@ class PlaylistItem(QWidget):
         self.init_ui()
 
     def init_ui(self):
-        # Main layout for the item, with padding to keep labels aligned to edges
-        main_layout = QHBoxLayout(self)
-        main_layout.setContentsMargins(10, 6, 10, 6)
-        main_layout.setSpacing(0)
+        # Create outer layout
+        outer_layout = QHBoxLayout(self)
+        outer_layout.setContentsMargins(4, 4, 4, 4)
+        outer_layout.setSpacing(0)
+
+        # Create container widget for the entire item
+        container = QWidget(self)
+        outer_layout.addWidget(container)
+
+        # Create layout for content inside container
+        content_layout = QHBoxLayout(container)
+        content_layout.setContentsMargins(10, 6, 10, 6)
+        content_layout.setSpacing(0)
 
         # Title label aligned to the left
-        self.title_label = QLabel(self.playlist_path.stem, self)
+        self.title_label = QLabel(self.playlist_path.stem, container)
         self.title_label.setFont(QFont("Segoe UI", 10))
-        self.title_label.setStyleSheet("color: white; padding-left: 5px;")  # Padding for title
-        main_layout.addWidget(self.title_label)
+        self.title_label.setStyleSheet("color: white;")
+        content_layout.addWidget(self.title_label)
 
-        # Spacer to push the count label to the far right
-        spacer = QSpacerItem(20, 20, QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
-        main_layout.addItem(spacer)
+        # Spacer to push count to the right
+        content_layout.addStretch()
 
         # Count label aligned to the right
-        self.count_label = QLabel(str(self.track_count), self)
+        self.count_label = QLabel(str(self.track_count), container)
         self.count_label.setFont(QFont("Segoe UI", 10))
-        self.count_label.setStyleSheet("color: lightgrey; padding-right: 5px;")  # Padding for count
-        main_layout.addWidget(self.count_label)
+        self.count_label.setStyleSheet("color: lightgrey;")
+        content_layout.addWidget(self.count_label)
+
+        # Set cursor to pointing hand
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
 
         # Apply the initial style
         self.update_style()
-        
-        # Set cursor to pointing hand
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
 
     def update_display(self, new_count: int = None):
         """Update the playlist display with a new count and refresh style."""
@@ -62,13 +70,17 @@ class PlaylistItem(QWidget):
 
     def update_style(self):
         """Update the visual style based on highlight state."""
-        style = f"""
+        # Style for the container widget (first child)
+        container_style = f"""
             QWidget {{
                 background-color: {"#0078D4" if self.highlighted else "#2D2D2D"};
                 border-radius: 4px;
             }}
+            QLabel {{
+                background-color: transparent;
+            }}
         """
-        self.setStyleSheet(style)
+        self.findChild(QWidget).setStyleSheet(container_style)
 
     def mousePressEvent(self, event):
         """Handle click event and emit the playlist path."""
