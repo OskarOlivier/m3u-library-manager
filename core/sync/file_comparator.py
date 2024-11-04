@@ -14,6 +14,7 @@ class ComparisonResult:
     missing_remotely: Set[Path]
     missing_locally: Set[Path]
     total_files: int
+    exists_remotely: bool = True
 
 class FileComparator:
     """Compares files between local and remote locations"""
@@ -84,8 +85,29 @@ class FileComparator:
             
             try:
                 self.logger.info(f"Copying remote playlist: {remote_playlist_path}")
-                self.ssh.copy_from_remote(remote_playlist_path, temp_playlist)
+                success = self.ssh.copy_from_remote(remote_playlist_path, temp_playlist)
+                
+                if not success:
+                    self.logger.warning(f"Remote playlist not found: {playlist_path.name}")
+                    return ComparisonResult(
+                        missing_remotely=set(Path('E:/Albums').joinpath(p.replace('/', '\\')) 
+                                           for p in local_paths),
+                        missing_locally=set(),
+                        total_files=len(local_paths),
+                        exists_remotely=False
+                    )
+                
                 remote_paths = self._get_normalized_paths(temp_playlist, is_remote=True)
+                
+            except Exception as e:
+                self.logger.error(f"Error accessing remote playlist: {e}")
+                return ComparisonResult(
+                    missing_remotely=set(Path('E:/Albums').joinpath(p.replace('/', '\\')) 
+                                       for p in local_paths),
+                    missing_locally=set(),
+                    total_files=len(local_paths),
+                    exists_remotely=False
+                )
             finally:
                 if temp_playlist.exists():
                     temp_playlist.unlink()
@@ -114,7 +136,8 @@ class FileComparator:
             return ComparisonResult(
                 missing_remotely=missing_remotely,
                 missing_locally=missing_locally,
-                total_files=len(local_paths)
+                total_files=len(local_paths),
+                exists_remotely=True
             )
             
         except Exception as e:

@@ -111,6 +111,7 @@ class SystemTrayApp(QObject):
         try:
             if self.window is None:
                 self.window = MainWindow()
+                self.window.system_tray = self.tray_icon  # Allow window to access tray
             
             if self.window.isHidden():
                 self.window.show()

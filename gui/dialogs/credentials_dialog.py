@@ -18,10 +18,11 @@ class PasswordDialog(QDialog):
     """Dialog for SSH password input"""
     
     def __init__(self, parent=None):
-        super().__init__(parent)
+        super().__init__(parent, Qt.WindowType.Dialog | Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint)
         self.setWindowTitle("SSH Password")
         self.setFixedWidth(400)
         self.setup_ui()
+        self.center_on_parent_or_screen()
         
     def setup_ui(self):
         layout = QVBoxLayout(self)
@@ -37,6 +38,7 @@ class PasswordDialog(QDialog):
         self.password_input = QLineEdit()
         self.password_input.setEchoMode(QLineEdit.EchoMode.Password)
         self.password_input.setPlaceholderText("SSH password")
+        self.password_input.setFont(QFont("Segoe UI", 11))
         
         form = QFormLayout()
         form.addRow("Password:", self.password_input)
@@ -48,20 +50,26 @@ class PasswordDialog(QDialog):
         
         self.cancel_btn = QPushButton("Cancel")
         self.cancel_btn.clicked.connect(self.reject)
+        self.cancel_btn.setFont(QFont("Segoe UI", 11))
         
         self.connect_btn = QPushButton("Connect")
         self.connect_btn.setDefault(True)
         self.connect_btn.clicked.connect(self.accept)
+        self.connect_btn.setFont(QFont("Segoe UI", 11))
         
         button_layout.addWidget(self.cancel_btn)
         button_layout.addWidget(self.connect_btn)
         
         layout.addLayout(button_layout)
         
+        # Set focus to password input
+        self.password_input.setFocus()
+        
         # Style
         self.setStyleSheet("""
             QDialog {
                 background-color: #202020;
+                border: 1px solid #404040;
             }
             QLabel {
                 color: white;
@@ -106,6 +114,26 @@ class PasswordDialog(QDialog):
                 background-color: #106EBE;
             }
         """)
+        
+    def center_on_parent_or_screen(self):
+        """Center dialog on parent window or screen."""
+        if self.parent() and self.parent().isVisible():
+            # Center on parent
+            parent_geo = self.parent().geometry()
+            self.move(
+                parent_geo.center().x() - self.width() // 2,
+                parent_geo.center().y() - self.height() // 2
+            )
+        else:
+            # Center on screen
+            from PyQt6.QtWidgets import QApplication
+            screen = QApplication.primaryScreen()
+            screen_geometry = screen.availableGeometry()
+            center_point = screen_geometry.center()
+            
+            frame_geometry = self.frameGeometry()
+            frame_geometry.moveCenter(center_point)
+            self.move(frame_geometry.topLeft())
         
     def get_credentials(self) -> SSHCredentialsResult:
         """Show dialog and return credentials"""

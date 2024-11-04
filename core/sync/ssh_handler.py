@@ -27,9 +27,19 @@ class SSHHandler:
     def __init__(self, credentials: SSHCredentials):
         self.credentials = credentials
         self.logger = logging.getLogger('ssh_handler')
+        self.logger.setLevel(logging.DEBUG)
+        
+        # Add console handler if not already present
+        if not self.logger.handlers:
+            console_handler = logging.StreamHandler()
+            console_handler.setLevel(logging.DEBUG)
+            formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+            console_handler.setFormatter(formatter)
+            self.logger.addHandler(console_handler)
         
     def test_connection(self) -> Tuple[bool, Optional[str]]:
         """Test SSH connection"""
+        self.logger.debug("Testing SSH connection")
         try:
             cmd = [
                 'plink',
@@ -40,6 +50,7 @@ class SSHHandler:
                 'echo "Connection test"'
             ]
             
+            self.logger.debug(f"Running command: plink -ssh {self.credentials.username}@{self.credentials.host}")
             result = subprocess.run(
                 cmd,
                 capture_output=True,
@@ -48,13 +59,19 @@ class SSHHandler:
             )
             
             if result.returncode == 0:
+                self.logger.debug("SSH connection test successful")
                 return True, None
+            self.logger.error(f"SSH connection test failed: {result.stderr}")
             return False, result.stderr
             
         except subprocess.TimeoutExpired:
+            self.logger.error("SSH connection timed out")
             return False, "Connection timed out"
         except Exception as e:
+            self.logger.error(f"SSH connection error: {e}")
             return False, str(e)
+
+    # ... rest of the SSHHandler implementation ...
             
     def copy_to_remote(self, local_path: Path, remote_path: str) -> bool:
         """Copy file to remote location"""

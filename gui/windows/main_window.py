@@ -7,7 +7,7 @@ from PyQt6.QtGui import QFont
 from pathlib import Path
 
 from .pages.curation_page import CurationPage
-from .pages.sync_page import SyncPage
+from .pages.sync.sync_page import SyncPage
 from .pages.explore_page import ExplorePage
 
 class NavigationButton(QLabel):
@@ -58,6 +58,11 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event):
         """Handle window close event"""
         try:
+            # Clean up pages
+            for page in self.pages.values():
+                if hasattr(page, 'cleanup'):
+                    page.cleanup()
+            
             # Hide window instead of closing when system tray is active
             if hasattr(self, 'system_tray') and self.system_tray.isVisible():
                 event.ignore()
@@ -65,6 +70,7 @@ class MainWindow(QMainWindow):
             else:
                 # Actually close the window
                 event.accept()
+                
         except Exception as e:
             print(f"Error handling close event: {e}")
             event.accept()  # Close anyway if there's an error
@@ -124,7 +130,7 @@ class MainWindow(QMainWindow):
             }
         """)
         close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        close_btn.mousePressEvent = lambda e: self.hide()  # Hide instead of close
+        close_btn.mousePressEvent = lambda e: self.close()  # Use close() to trigger closeEvent
         title_layout.addWidget(close_btn)
         
         header_layout.addWidget(title_bar)
@@ -173,6 +179,11 @@ class MainWindow(QMainWindow):
     def switch_page(self, page_name: str):
         """Switch to specified page and update navigation"""
         if page_name in self.pages:
+            # Clean up previous page if needed
+            current_widget = self.content.currentWidget()
+            if hasattr(current_widget, 'cleanup'):
+                current_widget.cleanup()
+                
             self.content.setCurrentWidget(self.pages[page_name])
             for name, btn in self.nav_buttons.items():
                 btn.set_active(name == page_name)
