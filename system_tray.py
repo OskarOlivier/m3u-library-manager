@@ -79,6 +79,7 @@ class SystemTrayApp(QObject):
             
             # Set menu and show icon
             self.tray_icon.setContextMenu(menu)
+            self.tray_icon.activated.connect(self.on_tray_activated)
             self.tray_icon.show()
             
             # Initial tooltip
@@ -106,37 +107,44 @@ class SystemTrayApp(QObject):
         except Exception as e:
             self.logger.error(f"Error checking hotkey: {e}")
             
+    def on_tray_activated(self, reason):
+        """Handle tray icon activation."""
+        if reason == QSystemTrayIcon.ActivationReason.DoubleClick:
+            self.show_window()
+            
     def show_window(self):
         """Show or create the main window."""
         try:
             if self.window is None:
                 self.window = MainWindow()
-                self.window.system_tray = self.tray_icon  # Allow window to access tray
             
-            if self.window.isHidden():
-                self.window.show()
-            else:
-                self.window.setWindowState(
-                    self.window.windowState() & ~Qt.WindowState.WindowMinimized
-                )
-                self.window.activateWindow()
-                self.window.raise_()
+            self.window.show()
+            self.window.setWindowState(self.window.windowState() & ~Qt.WindowState.WindowMinimized)
+            self.window.activateWindow()
+            self.window.raise_()
                 
         except Exception as e:
             self.logger.error(f"Error showing window: {e}")
             
+    def hide_window(self):
+        """Hide the main window."""
+        if self.window is not None:
+            self.window.hide()
+
     def quit_application(self):
         """Clean up and quit the application."""
         try:
             if self.window:
                 self.window.close()
             self.check_timer.stop()
-            self.tray_icon.hide()
+            if self.tray_icon:
+                self.tray_icon.hide()
             self.app.quit()
         except Exception as e:
             self.logger.error(f"Error during application shutdown: {e}")
             self.app.quit()  # Force quit even if cleanup fails
 
+            
 def main():
     """Main entry point for system tray application."""
     # Create application
