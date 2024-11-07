@@ -1,11 +1,10 @@
 # gui/widgets/playlist_widgets.py
 
-from PyQt6.QtWidgets import QLabel, QHBoxLayout, QSpacerItem, QSizePolicy, QWidget
+from PyQt6.QtWidgets import (QLabel, QHBoxLayout, QSpacerItem, 
+                           QSizePolicy, QWidget)
 from PyQt6.QtCore import Qt, pyqtSignal, QObject
 from PyQt6.QtGui import QFont
 from pathlib import Path
-
-__all__ = ['PlaylistItem', 'ClickHandler']
 
 class ClickHandler(QObject):
     """Signal handler for playlist clicks"""

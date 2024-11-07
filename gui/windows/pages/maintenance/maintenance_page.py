@@ -1,4 +1,5 @@
 # gui/windows/pages/maintenance/maintenance_page.py
+
 """Maintenance page implementation."""
 
 from PyQt6.QtWidgets import QVBoxLayout, QHBoxLayout, QWidget, QFrame
@@ -29,6 +30,7 @@ class MaintenancePage(BasePage):
         self.file_locator = FileLocatorHandler(self.state)
         self.sort_handler = SortHandler(self.state)
         self.delete_handler = DeleteHandler(self.state)
+        self.logger = logging.getLogger('maintenance_page')
         super().__init__()
         
     def setup_ui(self):
@@ -53,21 +55,15 @@ class MaintenancePage(BasePage):
         panels_layout.setContentsMargins(0, 0, 0, 0)
         
         # Initialize panels
-        self.playlist_panel = PlaylistPanel(
-            self.state,
-            on_analyze=self.file_locator.analyze_playlist,
-            on_delete=self.delete_handler.delete_playlist
-        )
+        self.playlist_panel = PlaylistPanel(self.state)
+        # Connect panel signals
+        self.playlist_panel.playlistAnalyzed.connect(self.file_locator.analyze_playlist)
+        self.playlist_panel.playlistDeleted.connect(self.delete_handler.delete_playlist)
         
-        self.file_locator_panel = FileLocatorPanel(
-            self.state,
-            on_locate=self.file_locator.locate_files
-        )
+        self.file_locator_panel = FileLocatorPanel(self.state)
+        self.file_locator_panel.filesLocated.connect(self.file_locator.locate_files)
         
-        self.sort_panel = SortPanel(
-            self.state,
-            on_sort=self.sort_handler.sort_playlist
-        )
+        self.sort_panel = SortPanel(self.state)
         
         self.status_panel = StatusPanel(self.state)
         
@@ -97,12 +93,35 @@ class MaintenancePage(BasePage):
         main_layout.addLayout(panels_layout)
         main_layout.addWidget(self.status_panel)
         
+        # Connect state signals
+        self.connect_signals()
+        
+    def connect_signals(self):
+        """Connect all state signals."""
+        # Analysis state
+        self.state.analysis_started.connect(
+            lambda p: self.state.set_status(f"Analyzing {p.name}..."))
+        self.state.analysis_completed.connect(
+            lambda p, _: self.state.set_status(f"Analysis complete for {p.name}"))
+        self.state.analysis_all_started.connect(
+            lambda: self.state.set_status("Analyzing all playlists..."))
+        self.state.analysis_all_completed.connect(
+            lambda: self.state.set_status("All playlists analyzed"))
+        
+        # Operation state
+        self.state.operation_started.connect(
+            lambda op: self.state.set_status(f"Running {op}..."))
+        self.state.operation_completed.connect(
+            lambda op, success: self.state.set_status(
+                f"{op} {'completed successfully' if success else 'failed'}"))
+            
     def showEvent(self, event):
         """Handle show event."""
         super().showEvent(event)
         # Refresh playlists when page is shown
         if hasattr(self, 'playlist_panel'):
-            self.playlist_panel.refresh_playlists()
+            from app.config import Config
+            self.playlist_panel.refresh_playlists(Path(Config.PLAYLISTS_DIR))
             
     def hideEvent(self, event):
         """Handle hide event."""

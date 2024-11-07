@@ -3,38 +3,61 @@
 from pathlib import Path
 from typing import Set
 from PyQt6.QtWidgets import QMessageBox
+import logging
 
-from app.config import Config
 from .async_base import AsyncOperation
 from .connection_handler import ConnectionHandler
 from ..state import SyncPageState
+from ..components.safety_dialogs import SafetyDialogs
+from core.playlist.safety import PlaylistSafety
+from app.config import Config
 
 class SyncHandler(AsyncOperation):
-    """Handles sync operations."""
+    """Handles sync operations with safety checks."""
     
     def __init__(self, state: SyncPageState, connection: ConnectionHandler):
         super().__init__()
         self.state = state
         self.connection = connection
+        self.safety = PlaylistSafety(Path(Config.BACKUP_DIR))
+        self.logger = logging.getLogger('sync_handler')
         
     def sync_files(self, operation: str, files: Set[Path]):
-        """Start a sync operation."""
+        """Start a sync operation with safety checks."""
         if not files:
             return
             
         async def _sync():
+            # Check connection
             success, error = self.connection.get_connection()
             if not success:
                 self.state.report_error(error)
                 return
                 
             try:
-                # Confirm deletions
+                # Get confirmation based on operation type
                 if operation.startswith('delete'):
                     location = 'local' if operation == 'delete_local' else 'remote'
-                    if not self._confirm_deletion(location, len(files)):
+                    if not SafetyDialogs.confirm_delete_files(location, len(files)):
+                        return
+                else:
+                    operation_name = operation.replace('_', ' ').title()
+                    if not SafetyDialogs.confirm_sync_operation(operation_name, len(files)):
                         return
                         
+                # Create backup for affected playlist
+                if self.state.current_playlist:
+                    self.logger.info("Creating backup...")
+                    backup_path = self.safety.create_backup(self.state.current_playlist)
+                    if backup_path:
+                        self.logger.info(f"Backup created at {backup_path}")
+                        SafetyDialogs.show_backup_created(backup_path)
+                    else:
+                        error_msg = "Failed to create backup"
+                        self.logger.error(error_msg)
+                        self.state.report_error(error_msg)
+                        return
+                
                 self.state.is_syncing = True
                 self.state.sync_started.emit(operation)
                 
@@ -56,8 +79,8 @@ class SyncHandler(AsyncOperation):
                 self.state.sync_completed.emit()
                 
             except Exception as e:
+                self.logger.error(f"Sync failed: {e}", exc_info=True)
                 self.state.report_error(f"Sync failed: {str(e)}")
-                self.logger.error("Sync error", exc_info=True)
                 
             finally:
                 self.state.is_syncing = False
@@ -66,14 +89,7 @@ class SyncHandler(AsyncOperation):
             _sync(),
             progress_callback=self.state.update_progress
         )
-            
-    def _confirm_deletion(self, location: str, count: int) -> bool:
-        """Show confirmation dialog for deletions."""
-        response = QMessageBox.question(
-            None,
-            "Confirm Deletion",
-            f"Are you sure you want to delete {count} files from the {location} location?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No
-        )
-        return response == QMessageBox.StandardButton.Yes
+
+    def cleanup(self):
+        """Clean up resources."""
+        super().cleanup()

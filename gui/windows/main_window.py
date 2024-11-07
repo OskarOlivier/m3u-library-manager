@@ -1,4 +1,5 @@
 # gui/windows/main_window.py
+
 from PyQt6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
                            QLabel, QStackedWidget, QApplication)
 from PyQt6.QtCore import Qt, QPoint, QTimer
@@ -7,7 +8,7 @@ from pathlib import Path
 import logging
 
 from .pages.base import BasePage
-from .pages.curation_page import CurationPage
+from .pages.curation import CurationPage  # Updated import
 from .pages.sync.sync_page import SyncPage
 from .pages.explore.explore_page import ExplorePage
 from .pages.maintenance.maintenance_page import MaintenancePage

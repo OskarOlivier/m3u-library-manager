@@ -2,29 +2,28 @@
 
 from pathlib import Path
 from typing import Optional, Tuple, List, Dict
-from dataclasses import dataclass
 import logging
 
 from core.matching.song_matcher import SongMatcher
 from core.common.file_utils import search_music_directory
 from core.playlist.operations import PlaylistOperations
 
-__all__ = ['PlaylistManager']
-
 class PlaylistManager:
     """Manages playlist operations and song toggling"""
     
-    def __init__(self, music_dir: Path, playlists_dir: Path):
+    def __init__(self, music_dir: Path, playlists_dir: Path, backup_dir: Path):
         """
         Initialize PlaylistManager.
         
         Args:
             music_dir: Base directory for music files
             playlists_dir: Directory containing playlists
+            backup_dir: Directory for playlist backups
         """
         self.music_dir = music_dir
         self.playlists_dir = playlists_dir
         self.matcher = SongMatcher()
+        self.operations = PlaylistOperations(playlists_dir, backup_dir)
         self.logger = logging.getLogger('playlist_manager')
         
     def toggle_song_in_playlist(self, 
@@ -57,20 +56,18 @@ class PlaylistManager:
                 return False, None
                 
             file_str = str(files[0])
-            success = False
             
             if include:
-                success = PlaylistOperations.add_song_to_playlist(playlist_path, file_str)
+                success, count = self.operations.add_song_to_playlist(playlist_path, file_str)
             else:
-                success = PlaylistOperations.remove_song_from_playlist(playlist_path, file_str)
+                success, count = self.operations.remove_song_from_playlist(playlist_path, file_str)
                 
             if success:
-                new_count = PlaylistOperations.get_track_count(playlist_path)
                 self.logger.info(
                     f"Successfully {'added to' if include else 'removed from'} "
-                    f"{playlist_path.name}, new count: {new_count}"
+                    f"{playlist_path.name}, new count: {count}"
                 )
-                return True, new_count
+                return True, count
                 
             return False, None
             
@@ -111,7 +108,7 @@ class PlaylistManager:
         try:
             playlists = []
             for path in sorted(self.playlists_dir.glob("*.m3u")):
-                count = PlaylistOperations.get_track_count(path) or 0
+                count = self.operations.get_track_count(path) or 0
                 playlists.append((path, count))
             return playlists
         except Exception as e:
@@ -130,7 +127,7 @@ class PlaylistManager:
             True if song is in playlist
         """
         try:
-            return PlaylistOperations.contains_song(playlist_path, str(file_path))
+            return self.operations.contains_song(playlist_path, str(file_path))
         except Exception as e:
             self.logger.error(f"Error checking song in playlist: {e}")
             return False

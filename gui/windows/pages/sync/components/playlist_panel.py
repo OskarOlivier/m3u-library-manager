@@ -1,6 +1,5 @@
 # gui/windows/pages/sync/components/playlist_panel.py
 
-"""Playlist list panel implementation."""
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
                            QPushButton, QListWidget, QListWidgetItem)
 from PyQt6.QtCore import Qt
@@ -18,6 +17,7 @@ class PlaylistPanel(QWidget):
     SYNC_COLOR = QColor("#1E824C")  # Soft green
     ERROR_COLOR = QColor("#8C1515")  # Soft red
     NORMAL_COLOR = QColor("#2D2D2D")  # Default background
+    REMOTE_ERROR_COLOR = QColor("#FF4444")  # Bright red for not found remotely
     
     def __init__(self, state: SyncPageState, 
                  on_analyze: Callable[[Path], None],
@@ -80,7 +80,7 @@ class PlaylistPanel(QWidget):
                 background-color: #0078D4;
             }
             QListWidget::item:disabled {
-                color: #666666;
+                color: #CCCCCC;
             }
         """)
         self.playlist_list.itemSelectionChanged.connect(self.on_selection_changed)
@@ -117,6 +117,26 @@ class PlaylistPanel(QWidget):
         self.analyze_btn.setStyleSheet(button_style)
         self.analyze_all_btn.setStyleSheet(button_style)
         
+    def _apply_analysis_style(self, item: QListWidgetItem, analysis: PlaylistAnalysis):
+        """Apply styling based on analysis results."""
+        if not analysis.exists_remotely:
+            # Playlist not found remotely - show in red and disable
+            item.setBackground(self.REMOTE_ERROR_COLOR)
+            item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEnabled)
+            item.setToolTip("Playlist not found on remote system")
+        elif analysis.is_synced:
+            # Fully synced - show in green and disable
+            item.setBackground(self.SYNC_COLOR)
+            item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEnabled)
+            item.setToolTip("Playlist is fully synchronized")
+        else:
+            # Has differences - show counts
+            item.setBackground(self.NORMAL_COLOR)
+            remote_count = len(analysis.missing_remotely)
+            local_count = len(analysis.missing_locally)
+            item.setText(f"{item.text()} ({remote_count}, {local_count})")
+            item.setToolTip(f"Missing remotely: {remote_count}\nMissing locally: {local_count}")
+            
     def connect_signals(self):
         """Connect state signals."""
         self.state.analysis_completed.connect(self.on_analysis_completed)
@@ -152,23 +172,6 @@ class PlaylistPanel(QWidget):
         self.playlist_list.addItem(item)
         self.playlist_items[playlist_path] = item
         
-    def _apply_analysis_style(self, item: QListWidgetItem, analysis: PlaylistAnalysis):
-        """Apply styling based on analysis results."""
-        if not analysis.exists_remotely:
-            # Playlist not found remotely
-            item.setBackground(self.ERROR_COLOR)
-            item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEnabled)
-        elif analysis.is_synced:
-            # Fully synced
-            item.setBackground(self.SYNC_COLOR)
-            item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEnabled)
-        else:
-            # Has differences
-            item.setBackground(self.NORMAL_COLOR)
-            remote_count = len(analysis.missing_remotely)
-            local_count = len(analysis.missing_locally)
-            item.setText(f"{item.text()} ({remote_count}, {local_count})")
-            
     def on_selection_changed(self):
         """Handle playlist selection changes."""
         selected_items = self.playlist_list.selectedItems()
@@ -188,7 +191,7 @@ class PlaylistPanel(QWidget):
         playlist_path = Path(item.data(Qt.ItemDataRole.UserRole))
         self.state.set_current_playlist(playlist_path)
         self.analyze_btn.setEnabled(True)
-        
+            
     def on_analyze_clicked(self):
         """Handle analyze button click."""
         if self.state.current_playlist:

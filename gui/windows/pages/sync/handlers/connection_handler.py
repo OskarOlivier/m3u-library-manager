@@ -25,52 +25,75 @@ class ConnectionHandler:
         self.local_base = Path(Config.LOCAL_BASE)
         self.backup_manager = BackupManager(Path(Config.BACKUP_DIR))
         
-    def get_connection(self) -> Tuple[bool, Optional[str]]:
+    def get_connection(self, max_attempts: int = 3) -> Tuple[bool, Optional[str]]:
         """
-        Establish SSH connection if needed.
+        Establish SSH connection if needed, with retry attempts.
         
+        Args:
+            max_attempts: Maximum number of password attempts
+            
         Returns:
-            Tuple of (success, error_message)
+            Tuple[bool, Optional[str]]: (success, error_message)
         """
         if self.ssh_handler is not None:
             return True, None
             
-        try:
-            # Get password
-            password = self._get_password()
-            if not password:
-                return False, "SSH connection cancelled"
+        attempt = 0
+        last_error = None
+        
+        while attempt < max_attempts:
+            try:
+                # Get password (cached or from user)
+                password = self._get_password()
+                if not password:
+                    return False, "SSH connection cancelled"
+                    
+                # Setup credentials
+                credentials = SSHCredentials(
+                    host=Config.SSH_HOST,
+                    username=Config.SSH_USERNAME,
+                    password=password,
+                    remote_path=Config.SSH_REMOTE_PATH
+                )
                 
-            # Setup credentials
-            credentials = SSHCredentials(
-                host=Config.SSH_HOST,
-                username=Config.SSH_USERNAME,
-                password=password,
-                remote_path=Config.SSH_REMOTE_PATH
-            )
-            
-            # Create and test connection
-            self.ssh_handler = SSHHandler(credentials)
-            success, error = self.ssh_handler.test_connection()
-            
-            if not success:
+                # Create and test connection
+                self.ssh_handler = SSHHandler(credentials)
+                success, error = self.ssh_handler.test_connection()
+                
+                if success:
+                    # Initialize components on successful connection
+                    self.file_comparator = FileComparator(self.ssh_handler)
+                    self.sync_ops = SyncOperations(
+                        self.ssh_handler,
+                        self.backup_manager,
+                        self.local_base,
+                        Config.SSH_REMOTE_PATH
+                    )
+                    
+                    # Verify remote path
+                    if not self.ssh_handler.verify_remote_path():
+                        return False, f"Remote path not accessible: {Config.SSH_REMOTE_PATH}"
+                    
+                    return True, None
+                    
+                # Handle authentication failures
+                if "authentication failed" in str(error).lower():
+                    self.logger.warning(f"Authentication failed, attempt {attempt + 1}/{max_attempts}")
+                    SSHCredentials._cached_password = None  # Clear cached password
+                    last_error = error
+                    attempt += 1
+                    continue
+                    
+                # Other errors are terminal
                 self.ssh_handler = None
                 return False, f"SSH connection failed: {error}"
                 
-            # Initialize components
-            self.file_comparator = FileComparator(self.ssh_handler)
-            self.sync_ops = SyncOperations(
-                self.ssh_handler,
-                self.backup_manager,
-                self.local_base,
-                Config.SSH_REMOTE_PATH
-            )
-            
-            return True, None
-            
-        except Exception as e:
-            self.logger.error("Connection error", exc_info=True)
-            return False, str(e)
+            except Exception as e:
+                self.logger.error("Connection error", exc_info=True)
+                return False, str(e)
+                
+        # Max attempts reached
+        return False, f"Authentication failed after {max_attempts} attempts"
             
     def _get_password(self) -> Optional[str]:
         """Get SSH password from cache or user."""
