@@ -1,7 +1,7 @@
 # gui/widgets/playlist_widgets.py
 
 from PyQt6.QtWidgets import (QLabel, QHBoxLayout, QSpacerItem, 
-                           QSizePolicy, QWidget)
+                           QSizePolicy, QWidget, QVBoxLayout)  # Added QVBoxLayout and other widgets
 from PyQt6.QtCore import Qt, pyqtSignal, QObject
 from PyQt6.QtGui import QFont
 from pathlib import Path
@@ -32,6 +32,7 @@ class PlaylistItem(QWidget):
 
         # Create container widget for the entire item
         container = QWidget(self)
+        container.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         outer_layout.addWidget(container)
 
         # Create layout for content inside container

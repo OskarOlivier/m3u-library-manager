@@ -1,5 +1,4 @@
 # gui/windows/pages/maintenance/maintenance_page.py
-
 """Maintenance page implementation."""
 
 from PyQt6.QtWidgets import QVBoxLayout, QHBoxLayout, QWidget, QFrame
@@ -8,11 +7,11 @@ from pathlib import Path
 import logging
 
 from gui.windows.pages import BasePage
+from gui.components.status_panel import StatusPanel
 from .components import (
     PlaylistPanel, 
     FileLocatorPanel, 
-    SortPanel,
-    StatusPanel
+    SortPanel
 )
 from .state import MaintenanceState
 from .handlers import (
@@ -65,8 +64,6 @@ class MaintenancePage(BasePage):
         
         self.sort_panel = SortPanel(self.state)
         
-        self.status_panel = StatusPanel(self.state)
-        
         # Create and style panel frames
         for panel in [
             self.playlist_panel,
@@ -91,6 +88,9 @@ class MaintenancePage(BasePage):
         main_layout.setSpacing(12)
         main_layout.setContentsMargins(12, 12, 12, 12)
         main_layout.addLayout(panels_layout)
+        
+        # Status panel
+        self.status_panel = StatusPanel(self.state)
         main_layout.addWidget(self.status_panel)
         
         # Connect state signals

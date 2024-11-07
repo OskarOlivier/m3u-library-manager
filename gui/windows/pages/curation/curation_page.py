@@ -1,5 +1,4 @@
-# gui/windows/pages/curation/page.py
-
+# gui/windows/pages/curation/curation_page.py
 from PyQt6.QtWidgets import QVBoxLayout, QWidget, QHBoxLayout
 from PyQt6.QtCore import Qt
 from pathlib import Path
@@ -7,11 +6,12 @@ import logging
 
 from app.config import Config
 from gui.windows.pages.base import BasePage
+from gui.components.status_panel import StatusPanel
 from core.matching.window_handler import WindowHandler
 from core.playlist import PlaylistManager
 
 from .state import CurationState
-from .handlers import SongHandler, PlaylistHandler 
+from .handlers import SongHandler, PlaylistHandler
 from .components import PlaylistGrid, SongInfoPanel, StatsPanel
 
 class CurationPage(BasePage):
@@ -40,7 +40,6 @@ class CurationPage(BasePage):
         
         self.logger = logging.getLogger('curation_page')
         
-        # Call parent class __init__
         super().__init__(parent)
         
     def setup_ui(self):
@@ -50,29 +49,40 @@ class CurationPage(BasePage):
         layout.setSpacing(12)
         layout.setContentsMargins(12, 12, 12, 12)
         
-        # Status and stats container
-        status_container = QWidget()
-        status_layout = QHBoxLayout(status_container)
-        status_layout.setContentsMargins(0, 0, 0, 0)
-        status_layout.setSpacing(16)
+        # Create main container
+        main_container = QWidget()
+        main_container.setStyleSheet("background-color: #202020;")
+        layout.addWidget(main_container)
         
-        # Song info panel (fixed width)
+        # Main container layout
+        main_layout = QVBoxLayout(main_container)
+        main_layout.setSpacing(12)
+        main_layout.setContentsMargins(12, 12, 12, 12)
+        
+        # Info container (song info and stats)
+        info_container = QWidget()
+        info_layout = QHBoxLayout(info_container)
+        info_layout.setContentsMargins(0, 0, 0, 0)
+        info_layout.setSpacing(16)
+        
         self.song_info = SongInfoPanel(self.state)
-        status_layout.addWidget(self.song_info)
+        info_layout.addWidget(self.song_info)
         
-        # Stats panel (right aligned)
         self.stats_panel = StatsPanel(self.state)
-        status_layout.addWidget(self.stats_panel)
+        info_layout.addWidget(self.stats_panel)
         
-        layout.addWidget(status_container)
+        main_layout.addWidget(info_container)
         
         # Playlist grid
         self.playlist_grid = PlaylistGrid(self.state)
+        main_layout.addWidget(self.playlist_grid)
         
         # Connect signals
         self.state.playlist_clicked.connect(self.playlist_handler.toggle_song_in_playlist)
         
-        layout.addWidget(self.playlist_grid)
+        # Status panel
+        self.status_panel = StatusPanel(self.state)
+        main_layout.addWidget(self.status_panel)
         
         # Initial playlist load
         self.refresh_playlists()

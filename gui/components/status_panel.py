@@ -1,12 +1,11 @@
-# gui/windows/pages/maintenance/components/status_panel.py
-
+# gui/components/status_panel.py
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
-                           QProgressBar, QMessageBox)
+                           QProgressBar)
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QFont
 
 class StatusPanel(QWidget):
-    """Panel for showing operation status and progress."""
+    """Unified status panel for showing operation status and progress."""
     
     def __init__(self, state):
         super().__init__()
@@ -69,16 +68,12 @@ class StatusPanel(QWidget):
         
     def connect_signals(self):
         """Connect to state signals."""
-        # Status updates
-        self.state.status_changed.connect(self.update_status)
-        self.state.error_occurred.connect(self.show_error)
-        
-        # Progress updates
-        self.state.progress_updated.connect(self.update_progress)
-        
-        # Operation states
-        self.state.operation_started.connect(self.on_operation_started)
-        self.state.operation_completed.connect(self.on_operation_completed)
+        if hasattr(self.state, 'status_changed'):
+            self.state.status_changed.connect(self.update_status)
+        if hasattr(self.state, 'error_occurred'):
+            self.state.error_occurred.connect(self.show_error)
+        if hasattr(self.state, 'progress_updated'):
+            self.state.progress_updated.connect(self.update_progress)
         
     def update_status(self, message: str):
         """Update status message."""
@@ -101,14 +96,6 @@ class StatusPanel(QWidget):
         """)
         self.progress_bar.setVisible(False)
         
-        # Show error dialog for serious errors
-        QMessageBox.critical(
-            self,
-            "Operation Failed",
-            f"An error occurred:\n{error}",
-            QMessageBox.StandardButton.Ok
-        )
-        
     def update_progress(self, value: int):
         """Update progress bar."""
         if not self.progress_bar.isVisible():
@@ -119,21 +106,3 @@ class StatusPanel(QWidget):
         if value >= 100:
             from PyQt6.QtCore import QTimer
             QTimer.singleShot(1000, lambda: self.progress_bar.setVisible(False))
-            
-    def on_operation_started(self, operation: str):
-        """Handle operation start."""
-        self.update_status(f"Running {operation}...")
-        self.progress_bar.setVisible(True)
-        self.progress_bar.setValue(0)
-        
-    def on_operation_completed(self, operation: str, success: bool):
-        """Handle operation completion."""
-        if success:
-            self.update_status(f"{operation} completed successfully")
-            self.progress_bar.setValue(100)
-        else:
-            self.show_error(f"{operation} failed")
-        
-        # Hide progress after delay
-        from PyQt6.QtCore import QTimer
-        QTimer.singleShot(1000, lambda: self.progress_bar.setVisible(False))

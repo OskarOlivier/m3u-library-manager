@@ -7,7 +7,8 @@ import logging
 
 from app.config import Config
 from gui.windows.pages import BasePage
-from .components import PlaylistPanel, FileListPanel, StatusPanel
+from gui.components import StatusPanel  # Changed this import
+from .components import PlaylistPanel, FileListPanel
 from .state import SyncPageState
 from .handlers import ConnectionHandler, AnalysisHandler, SyncHandler
 

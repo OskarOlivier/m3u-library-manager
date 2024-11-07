@@ -2,31 +2,25 @@
 
 from PyQt6.QtWidgets import (QWidget, QGridLayout, QScrollArea, 
                            QFrame, QVBoxLayout, QLabel, QSizePolicy,
-                           QHBoxLayout)  # Added QHBoxLayout
+                           QHBoxLayout)  # Added QHBoxLayout here tooBoxLayout, QLabel, QSizePolicy)  # Added QSizePolicy
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QFont
 from pathlib import Path
-import logging
 from typing import Dict
+import logging
 
 from gui.widgets import PlaylistItem, ClickHandler
 from utils.m3u.parser import read_m3u
 
 class PlaylistGrid(QScrollArea):
     """Grid display of playlists with scroll support"""
-    
+                
     def __init__(self, state, parent=None):
         super().__init__(parent)
         self.state = state
         self.playlist_items: Dict[Path, PlaylistItem] = {}
         self.click_handler = ClickHandler()
         self.logger = logging.getLogger('playlist_grid')
-        
-        # Title with count
-        self.title_label = QLabel("Playlists (0)")
-        self.title_label.setFont(QFont("Segoe UI", 11))
-        self.title_label.setStyleSheet("color: white;")
-        
         self.setup_ui()
         self.connect_signals()
         
@@ -38,11 +32,15 @@ class PlaylistGrid(QScrollArea):
         outer_layout.setSpacing(8)
         outer_layout.setContentsMargins(8, 8, 8, 8)
         
-        # Add title
+        # Add title label
+        self.title_label = QLabel("Playlists")
+        self.title_label.setFont(QFont("Segoe UI", 11))
+        self.title_label.setStyleSheet("color: white;")
         outer_layout.addWidget(self.title_label)
         
         # Create grid container
         grid_container = QWidget()
+        grid_container.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)  # Added this line
         self.grid = QGridLayout(grid_container)
         self.grid.setSpacing(8)
         self.grid.setContentsMargins(0, 0, 0, 0)
@@ -54,6 +52,9 @@ class PlaylistGrid(QScrollArea):
         # Configure scroll area
         self.setWidgetResizable(True)
         self.setFrameShape(QFrame.Shape.NoFrame)
+        # Set size policy for the scroll area itself
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)  # Added this line
+        
         self.setStyleSheet("""
             QScrollArea {
                 background-color: transparent;
@@ -102,24 +103,33 @@ class PlaylistGrid(QScrollArea):
                           if p.name != "Love.bak.m3u")
         cols = 4
         
-        for i, playlist_path in enumerate(playlists):
-            try:
-                track_count = len(read_m3u(str(playlist_path)))
-                item = PlaylistItem(playlist_path, track_count, self.click_handler)
-                self.playlist_items[playlist_path] = item
-                
-                row = i // cols
-                col = i % cols
-                self.grid.addWidget(item, row, col)
-                
-                # Update state
-                self.state.update_playlist(playlist_path, track_count)
-                
-            except Exception as e:
-                self.logger.error(f"Error adding playlist {playlist_path}: {e}")
-        
-        # Update playlist count in title
-        self._update_title()
+        try:
+            for i, playlist_path in enumerate(playlists):
+                self.logger.debug(f"Adding playlist: {playlist_path}")
+                try:
+                    track_count = len(read_m3u(str(playlist_path)))
+                    item = PlaylistItem(playlist_path, track_count, self.click_handler)
+                    self.playlist_items[playlist_path] = item
+                    
+                    row = i // cols
+                    col = i % cols
+                    self.logger.debug(f"Adding to grid at position ({row}, {col})")
+                    self.grid.addWidget(item, row, col)
+                    
+                    # Update state
+                    self.state.update_playlist(playlist_path, track_count)
+                    
+                except Exception as e:
+                    self.logger.error(f"Error adding playlist {playlist_path}: {e}")
+                    continue
+                    
+            # Update playlist count in title
+            count = len(self.playlist_items)
+            self.title_label.setText(f"Playlists ({count})")
+            self.logger.debug(f"Updated grid with {count} playlists")
+            
+        except Exception as e:
+            self.logger.error(f"Error refreshing playlists: {e}", exc_info=True)
         
     def _update_title(self):
         """Update title with playlist count"""
