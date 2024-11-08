@@ -52,6 +52,8 @@ class SystemTrayApp(QObject):
         self.check_timer.timeout.connect(self.check_hotkey)
         self.check_timer.start(100)  # Check every 100ms
         
+        self.last_active_page = None
+        
     def setup_system_tray(self):
         """Initialize system tray icon and menu."""
         try:
@@ -102,7 +104,7 @@ class SystemTrayApp(QObject):
         try:
             is_pressed = self.hotkey.is_pressed()
             if is_pressed and not self.last_trigger:
-                self.show_window()
+                self.toggle_window()
             self.last_trigger = is_pressed
         except Exception as e:
             self.logger.error(f"Error checking hotkey: {e}")
@@ -112,25 +114,36 @@ class SystemTrayApp(QObject):
         if reason == QSystemTrayIcon.ActivationReason.DoubleClick:
             self.show_window()
             
-    def show_window(self):
-        """Show or create the main window."""
-        try:
-            if self.window is None:
-                self.window = MainWindow()
-            
-            self.window.show()
-            self.window.setWindowState(self.window.windowState() & ~Qt.WindowState.WindowMinimized)
-            self.window.activateWindow()
-            self.window.raise_()
+    def toggle_window(self):
+        """Show or hide the window."""
+        if self.window is None:
+            self.show_window()
+        else:
+            if self.window.isVisible():
+                self.hide_window()
+            else:
+                self.show_window()
                 
-        except Exception as e:
-            self.logger.error(f"Error showing window: {e}")
-            
     def hide_window(self):
-        """Hide the main window."""
+        """Hide the window and remember current page."""
         if self.window is not None:
+            if hasattr(self.window, 'current_page'):
+                self.last_active_page = self.window.current_page
             self.window.hide()
-
+            
+    def show_window(self):
+        """Show the window and restore last active page."""
+        if self.window is None:
+            self.window = MainWindow()
+            
+        if self.last_active_page and hasattr(self.window, 'switch_page'):
+            self.window.switch_page(self.last_active_page)
+            
+        self.window.show()
+        self.window.setWindowState(self.window.windowState() & ~Qt.WindowState.WindowMinimized)
+        self.window.activateWindow()
+        self.window.raise_()
+        
     def quit_application(self):
         """Clean up and quit the application."""
         try:

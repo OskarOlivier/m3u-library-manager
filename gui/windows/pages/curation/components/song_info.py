@@ -45,16 +45,12 @@ class SongInfoPanel(QWidget):
         self.info_label.setText("No song playing")
         
     def _on_status_changed(self, status):
-        """Handle status change"""
-        self.status_timer.stop()
-        self.info_label.setText(status)
-        self.status_timer.start(2000)  # Reset after 2 seconds
+        """Handle status change - ignore to keep current song display"""
+        pass
         
     def _on_error(self, error):
-        """Handle error"""
-        self.status_timer.stop()
-        self.info_label.setText(f"Error: {error}")
-        self.status_timer.start(2000)
+        """Handle error - ignore to keep current song display"""
+        pass
         
     def _reset_status(self):
         """Reset to current song display"""

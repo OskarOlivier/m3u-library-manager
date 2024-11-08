@@ -2,7 +2,7 @@
 
 from PyQt6.QtWidgets import (QWidget, QGridLayout, QScrollArea, 
                            QFrame, QVBoxLayout, QLabel, QSizePolicy,
-                           QHBoxLayout)  # Added QHBoxLayout here tooBoxLayout, QLabel, QSizePolicy)  # Added QSizePolicy
+                           QHBoxLayout)
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QFont
 from pathlib import Path
@@ -29,31 +29,24 @@ class PlaylistGrid(QScrollArea):
         # Create outer container and layout
         outer_container = QWidget()
         outer_layout = QVBoxLayout(outer_container)
-        outer_layout.setSpacing(8)
-        outer_layout.setContentsMargins(8, 8, 8, 8)
-        
-        # Add title label
-        self.title_label = QLabel("Playlists")
-        self.title_label.setFont(QFont("Segoe UI", 11))
-        self.title_label.setStyleSheet("color: white;")
-        outer_layout.addWidget(self.title_label)
+        outer_layout.setSpacing(4)  # Reduced spacing
+        outer_layout.setContentsMargins(4, 4, 4, 4)  # Reduced margins
         
         # Create grid container
         grid_container = QWidget()
-        grid_container.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)  # Added this line
+        grid_container.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.grid = QGridLayout(grid_container)
-        self.grid.setSpacing(8)
+        self.grid.setSpacing(4)  # Reduced grid spacing
         self.grid.setContentsMargins(0, 0, 0, 0)
         
-        # Add grid to scroll area
-        self.setWidget(outer_container)
+        # Add grid to outer layout
         outer_layout.addWidget(grid_container)
         
         # Configure scroll area
+        self.setWidget(outer_container)
         self.setWidgetResizable(True)
         self.setFrameShape(QFrame.Shape.NoFrame)
-        # Set size policy for the scroll area itself
-        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)  # Added this line
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         
         self.setStyleSheet("""
             QScrollArea {
@@ -87,9 +80,9 @@ class PlaylistGrid(QScrollArea):
         
     def connect_signals(self):
         """Connect to state signals"""
-        self.state.playlist_updated.connect(self._on_playlist_updated)
-        self.state.playlist_highlighted.connect(self._on_playlist_highlighted)
-        self.click_handler.clicked.connect(self._on_playlist_clicked)
+        self.state.playlist_updated.connect(self.on_playlist_updated)
+        self.state.playlist_highlighted.connect(self.on_playlist_highlighted)
+        self.click_handler.clicked.connect(self.on_playlist_clicked)
         
     def refresh_playlists(self, playlists_dir: Path):
         """Refresh the playlist grid"""
@@ -98,9 +91,10 @@ class PlaylistGrid(QScrollArea):
             self.grid.itemAt(i).widget().setParent(None)
         self.playlist_items.clear()
         
-        # Add playlists to grid
-        playlists = sorted(p for p in playlists_dir.glob("*.m3u")
-                          if p.name != "Love.bak.m3u")
+        # Get regular playlists
+        from utils.playlist.stats import get_regular_playlists
+        playlists = get_regular_playlists(playlists_dir)
+        
         cols = 4
         
         try:
@@ -123,32 +117,22 @@ class PlaylistGrid(QScrollArea):
                     self.logger.error(f"Error adding playlist {playlist_path}: {e}")
                     continue
                     
-            # Update playlist count in title
-            count = len(self.playlist_items)
-            self.title_label.setText(f"Playlists ({count})")
-            self.logger.debug(f"Updated grid with {count} playlists")
-            
         except Exception as e:
             self.logger.error(f"Error refreshing playlists: {e}", exc_info=True)
-        
-    def _update_title(self):
-        """Update title with playlist count"""
-        count = len(self.playlist_items)
-        self.title_label.setText(f"Playlists ({count})")
-        
-    def _on_playlist_updated(self, playlist_path: Path, count: int):
+            
+    def on_playlist_updated(self, playlist_path: Path, count: int):
         """Handle playlist track count update"""
         if playlist_path in self.playlist_items:
             self.playlist_items[playlist_path].update_display(count)
             
-    def _on_playlist_highlighted(self, playlist_path: Path, highlighted: bool):
+    def on_playlist_highlighted(self, playlist_path: Path, highlighted: bool):
         """Handle playlist highlight state change"""
         if playlist_path in self.playlist_items:
             item = self.playlist_items[playlist_path]
             item.highlighted = highlighted
             item.update_style()
             
-    def _on_playlist_clicked(self, playlist_path: Path):
+    def on_playlist_clicked(self, playlist_path: Path):
         """Handle playlist click"""
         if not self.state.current_song:
             return
@@ -162,79 +146,3 @@ class PlaylistGrid(QScrollArea):
         
         # Emit through state
         self.state.emit_playlist_clicked(playlist_path)
-
-class PlaylistItem(QWidget):
-    """Interactive playlist item with separated title and count aligned to edges."""
-
-    def __init__(self, playlist_path: Path, track_count: int, click_handler: ClickHandler = None, parent=None):
-        super().__init__(parent)
-        self.playlist_path = playlist_path
-        self.track_count = track_count
-        self.highlighted = False
-        self.click_handler = click_handler
-
-        # Ensure PlaylistItem stretches to fill available horizontal space
-        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
-        self.init_ui()
-
-    def init_ui(self):
-        # Create outer layout
-        outer_layout = QHBoxLayout(self)
-        outer_layout.setContentsMargins(4, 4, 4, 4)
-        outer_layout.setSpacing(0)
-
-        # Create container widget for the entire item
-        container = QWidget(self)
-        outer_layout.addWidget(container)
-
-        # Create layout for content inside container
-        content_layout = QHBoxLayout(container)
-        content_layout.setContentsMargins(10, 6, 10, 6)
-        content_layout.setSpacing(0)
-
-        # Title label aligned to the left
-        self.title_label = QLabel(self.playlist_path.stem, container)
-        self.title_label.setFont(QFont("Segoe UI", 10))
-        self.title_label.setStyleSheet("color: white;")
-        content_layout.addWidget(self.title_label)
-
-        # Spacer to push count to the right
-        content_layout.addStretch()
-
-        # Count label aligned to the right
-        self.count_label = QLabel(str(self.track_count), container)
-        self.count_label.setFont(QFont("Segoe UI", 10))
-        self.count_label.setStyleSheet("color: lightgrey;")
-        content_layout.addWidget(self.count_label)
-
-        # Set cursor to pointing hand
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
-
-        # Apply the initial style
-        self.update_style()
-
-    def update_display(self, new_count: int = None):
-        """Update the playlist display with a new count and refresh style."""
-        if new_count is not None:
-            self.track_count = new_count
-            self.count_label.setText(str(self.track_count))
-        self.update_style()
-
-    def update_style(self):
-        """Update the visual style based on highlight state."""
-        # Style for the container widget (first child)
-        container_style = f"""
-            QWidget {{
-                background-color: {"#0078D4" if self.highlighted else "#2D2D2D"};
-                border-radius: 4px;
-            }}
-            QLabel {{
-                background-color: transparent;
-            }}
-        """
-        self.findChild(QWidget).setStyleSheet(container_style)
-
-    def mousePressEvent(self, event):
-        """Handle click event and emit the playlist path."""
-        if event.button() == Qt.MouseButton.LeftButton and self.click_handler:
-            self.click_handler.clicked.emit(self.playlist_path)

@@ -70,8 +70,6 @@ class SSHHandler:
             
             if result.returncode == 0:
                 self.logger.debug("SSH connection test successful")
-                # Cache password only on successful connection
-                SSHCredentials._cached_password = self.credentials.password
                 return True, None
                 
             # Check for specific error conditions
@@ -110,23 +108,26 @@ class SSHHandler:
         except Exception as e:
             self.logger.error(f"Failed to verify remote path: {e}")
             return False
-            
+
     def copy_to_remote(self, local_path: Path, remote_path: str) -> bool:
-        """Copy file to remote location."""
+        """Copy file to remote location using pscp."""
         try:
+            self.logger.debug(f"Copying {local_path} to {remote_path}")
             cmd = [
                 'pscp',
-                '-pw',
-                self.credentials.password,
+                '-pw', self.credentials.password,
                 str(local_path),
                 f'{self.credentials.username}@{self.credentials.host}:{remote_path}'
             ]
             
+            self.logger.debug(f"Running command: pscp [password hidden] {str(local_path)} {self.credentials.username}@{self.credentials.host}:{remote_path}")
             result = subprocess.run(cmd, capture_output=True, text=True)
+            
             if result.returncode != 0:
                 self.logger.error(f"Error copying to remote: {result.stderr}")
                 return False
                 
+            self.logger.debug("File copied successfully")
             return True
             
         except Exception as e:
@@ -134,31 +135,54 @@ class SSHHandler:
             return False
             
     def copy_from_remote(self, remote_path: str, local_path: Path) -> bool:
-        """Copy file from remote location."""
+        """Copy file from remote location using pscp."""
         try:
+            self.logger.debug(f"Starting remote fetch operation")
+            self.logger.debug(f"Fetching {remote_path} to {local_path}")
+            
+            # Construct command
             cmd = [
                 'pscp',
-                '-pw',
-                self.credentials.password,
+                '-pw', self.credentials.password,
                 f'{self.credentials.username}@{self.credentials.host}:{remote_path}',
                 str(local_path)
             ]
             
-            result = subprocess.run(cmd, capture_output=True, text=True)
+            self.logger.debug("Executing pscp command...")
+            
+            # Add timeout to prevent hanging
+            result = subprocess.run(
+                cmd, 
+                capture_output=True, 
+                text=True,
+                timeout=30  # 30 second timeout
+            )
+            
+            self.logger.debug(f"pscp return code: {result.returncode}")
+            if result.stdout:
+                self.logger.debug(f"pscp stdout: {result.stdout}")
+            if result.stderr:
+                self.logger.debug(f"pscp stderr: {result.stderr}")
+            
+            # Handle "no such file" error specifically
+            if "no such file" in result.stderr.lower():
+                self.logger.debug(f"Remote file not found: {remote_path}")
+                return False
+            
             if result.returncode != 0:
-                error = result.stderr.lower()
-                if "no such file" in error:
-                    self.logger.warning(f"Remote file not found: {remote_path}")
-                    return False
                 self.logger.error(f"Error copying from remote: {result.stderr}")
                 return False
                 
+            self.logger.debug("File copied successfully")
             return True
             
+        except subprocess.TimeoutExpired:
+            self.logger.error("Copy operation timed out after 30 seconds")
+            return False
         except Exception as e:
             self.logger.error(f"Failed to copy from remote: {e}")
-            return False
-            
+        return False
+        
     def delete_remote_file(self, remote_path: str) -> bool:
         """Delete file from remote location."""
         try:

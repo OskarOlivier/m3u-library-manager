@@ -1,7 +1,10 @@
+# gui/windows/pages/curation/state.py
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Dict, Set
 from PyQt6.QtCore import QObject, pyqtSignal
+import logging
+from utils.m3u.parser import read_m3u
 
 @dataclass
 class CurrentSong:
@@ -23,10 +26,12 @@ class CurationState(QObject):
     
     # Stats signals
     stats_updated = pyqtSignal(int, int)  # total_tracks, unplaylisted
+    stats_progress = pyqtSignal(int)  # For stats calculation progress
     
     # Status signals
     status_changed = pyqtSignal(str)  # status message
     error_occurred = pyqtSignal(str)  # error message
+    progress_updated = pyqtSignal(int)  # progress value
     
     def __init__(self):
         super().__init__()
@@ -35,6 +40,7 @@ class CurationState(QObject):
         self.highlighted_playlists: Set[Path] = set()
         self.playlist_manager = None  # Will be set by page
         self.playlists_dir = None  # Will be set by page
+        self.logger = logging.getLogger('curation_state')
         
     def set_current_song(self, artist: str, title: str):
         """Update current song."""
@@ -76,6 +82,10 @@ class CurationState(QObject):
         self.error_occurred.emit(error)
         self.set_status(f"Error: {error}")
         
+    def update_progress(self, value: int):
+        """Update progress value."""
+        self.progress_updated.emit(value)
+        
     def collect_unplaylisted(self) -> bool:
         """Create playlist with unplaylisted loved tracks."""
         if not self.playlist_manager:
@@ -85,11 +95,16 @@ class CurationState(QObject):
             playlisted_tracks = set()
             loved_tracks = set()
             
-            # Get all playlisted tracks
+            # Get all playlisted tracks (excluding Unplaylisted_ playlists)
             for playlist in self.playlists_dir.glob("*.m3u"):
-                if playlist.name != "Love.bak.m3u":
+                if (not playlist.name.startswith("Unplaylisted_") and 
+                    playlist.name != "Love.bak.m3u"):
+                    self.logger.debug(f"Reading playlist: {playlist.name}")
                     paths = read_m3u(str(playlist))
+                    self.logger.debug(f"Found {len(paths)} tracks in {playlist.name}")
                     playlisted_tracks.update(paths)
+            
+            self.logger.info(f"Total tracks in regular playlists: {len(playlisted_tracks)}")
                     
             # Get loved tracks
             loved_playlist = self.playlists_dir / "Love.bak.m3u"
@@ -98,10 +113,14 @@ class CurationState(QObject):
                 return False
                 
             loved_tracks = set(read_m3u(str(loved_playlist)))
+            self.logger.info(f"Total loved tracks: {len(loved_tracks)}")
             
             # Calculate unplaylisted
             unplaylisted = sorted(loved_tracks - playlisted_tracks)
+            self.logger.info(f"Found {len(unplaylisted)} unplaylisted tracks")
+            
             if not unplaylisted:
+                self.logger.info("No unplaylisted tracks found")
                 return False
                 
             # Create timestamp-based playlist name
@@ -109,19 +128,38 @@ class CurationState(QObject):
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             new_playlist = self.playlists_dir / f"Unplaylisted_{timestamp}.m3u"
             
-            # Write tracks
+            # Write tracks with UTF-8 encoding
+            import codecs
             from utils.m3u.parser import write_m3u
             write_m3u(str(new_playlist), unplaylisted)
             
-            # Open with Dopamine
-            from pathlib import Path
+            # Verify the written file
+            try:
+                written_tracks = read_m3u(str(new_playlist))
+                self.logger.info(f"Successfully wrote {len(written_tracks)} tracks to {new_playlist.name}")
+                if len(written_tracks) != len(unplaylisted):
+                    raise ValueError("Written track count doesn't match expected")
+            except Exception as e:
+                self.report_error(f"Failed to verify written playlist: {str(e)}")
+                return False
+            
+            # Try both common Dopamine install locations
             import subprocess
-            dopamine_path = Path(r"C:\Program Files (x86)\Dopamine\dopamine.exe")
-            if dopamine_path.exists():
-                subprocess.Popen([str(dopamine_path), str(new_playlist)])
-                
-            return True
+            dopamine_paths = [
+                #Path(r"C:\Program Files\Dopamine\Dopamine.exe"),
+                Path(r"C:\Program Files (x86)\Dopamine\Dopamine.exe")
+            ]
+            
+            for dopamine_path in dopamine_paths:
+                if dopamine_path.exists():
+                    self.logger.info(f"Launching Dopamine from: {dopamine_path}")
+                    subprocess.Popen([str(dopamine_path), str(new_playlist)])
+                    return True
+                    
+            self.report_error("Dopamine.exe not found in expected locations")
+            return False
             
         except Exception as e:
+            self.logger.error(f"Failed to collect unplaylisted tracks: {e}", exc_info=True)
             self.report_error(f"Failed to collect unplaylisted: {str(e)}")
             return False

@@ -1,5 +1,5 @@
 # gui/windows/pages/curation/curation_page.py
-from PyQt6.QtWidgets import QVBoxLayout, QWidget, QHBoxLayout
+from PyQt6.QtWidgets import QVBoxLayout, QWidget, QHBoxLayout, QSpacerItem, QSizePolicy
 from PyQt6.QtCore import Qt
 from pathlib import Path
 import logging
@@ -59,30 +59,32 @@ class CurationPage(BasePage):
         main_layout.setSpacing(12)
         main_layout.setContentsMargins(12, 12, 12, 12)
         
-        # Info container (song info and stats)
-        info_container = QWidget()
-        info_layout = QHBoxLayout(info_container)
-        info_layout.setContentsMargins(0, 0, 0, 0)
-        info_layout.setSpacing(16)
-        
+        # Song info at top
         self.song_info = SongInfoPanel(self.state)
-        info_layout.addWidget(self.song_info)
+        main_layout.addWidget(self.song_info)
         
-        self.stats_panel = StatsPanel(self.state)
-        info_layout.addWidget(self.stats_panel)
-        
-        main_layout.addWidget(info_container)
-        
-        # Playlist grid
+        # Playlist grid (takes most space)
         self.playlist_grid = PlaylistGrid(self.state)
         main_layout.addWidget(self.playlist_grid)
         
+        # Bottom container for status and stats
+        bottom_container = QWidget()
+        bottom_layout = QHBoxLayout(bottom_container)
+        bottom_layout.setContentsMargins(0, 0, 0, 0)
+        bottom_layout.setSpacing(12)
+        
+        # Status panel (left side)
+        self.status_panel = StatusPanel(self.state)
+        bottom_layout.addWidget(self.status_panel)
+        
+        # Stats panel (right side)
+        self.stats_panel = StatsPanel(self.state)
+        bottom_layout.addWidget(self.stats_panel)
+        
+        main_layout.addWidget(bottom_container)
+        
         # Connect signals
         self.state.playlist_clicked.connect(self.playlist_handler.toggle_song_in_playlist)
-        
-        # Status panel
-        self.status_panel = StatusPanel(self.state)
-        main_layout.addWidget(self.status_panel)
         
         # Initial playlist load
         self.refresh_playlists()
@@ -90,19 +92,30 @@ class CurationPage(BasePage):
         # Start song detection
         self.song_handler.start()
         
+        from .handlers.stats_handler import StatsHandler
+        self.stats_handler = StatsHandler(self.state, self.playlists_dir)
+        
     def showEvent(self, event):
         """Handle show event."""
         super().showEvent(event)
-        # Refresh playlists when page is shown
+        if hasattr(self, 'song_handler'):
+            self.song_handler.start()
         if hasattr(self, 'playlist_grid'):
             self.refresh_playlists()
-        
+            self.calculate_stats()
+
     def hideEvent(self, event):
         """Handle hide event."""
         super().hideEvent(event)
-        # Clear current song when page is hidden
+        if hasattr(self, 'song_handler'):
+            self.song_handler.stop()
         if hasattr(self, 'state'):
             self.state.clear_current_song()
+
+    def calculate_stats(self):
+        """Start playlist stats calculation."""
+        if hasattr(self, 'stats_handler'):
+            self.stats_handler.start_analysis()
             
     def refresh_playlists(self):
         """Refresh playlist grid and stats."""

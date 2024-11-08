@@ -33,14 +33,20 @@ class FileComparator:
         Returns:
             bool: True if playlist exists remotely
         """
-        remote_path = f"/media/CHIA/Music/{playlist_name}"
+        remote_path = f"{self.ssh.credentials.remote_path}/{playlist_name}"
         temp_path = Path(tempfile.gettempdir()) / f"temp_{playlist_name}"
         
         try:
+            self.logger.debug(f"Checking remote playlist: {remote_path}")
             success = self.ssh.copy_from_remote(remote_path, temp_path)
+            self.logger.debug(f"Remote check result: {success}")
+            
             if temp_path.exists():
+                self.logger.debug("Cleaning up temporary file")
                 temp_path.unlink()
+                
             return success
+            
         except Exception as e:
             self.logger.error(f"Error checking remote playlist: {e}")
             return False

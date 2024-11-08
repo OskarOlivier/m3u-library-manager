@@ -36,7 +36,12 @@ class ConnectionHandler:
             Tuple[bool, Optional[str]]: (success, error_message)
         """
         if self.ssh_handler is not None:
-            return True, None
+            # Test existing connection
+            success, error = self.ssh_handler.test_connection(invalidate_on_fail=True)
+            if success:
+                return True, None
+            # If test fails, clear handler and try again
+            self.ssh_handler = None
             
         attempt = 0
         last_error = None
@@ -47,7 +52,9 @@ class ConnectionHandler:
                 password = self._get_password()
                 if not password:
                     return False, "SSH connection cancelled"
-                    
+                
+                self.logger.debug(f"Attempting connection (attempt {attempt + 1}/{max_attempts})")
+                
                 # Setup credentials
                 credentials = SSHCredentials(
                     host=Config.SSH_HOST,
@@ -61,6 +68,8 @@ class ConnectionHandler:
                 success, error = self.ssh_handler.test_connection()
                 
                 if success:
+                    self.logger.info("SSH connection successful")
+                    
                     # Initialize components on successful connection
                     self.file_comparator = FileComparator(self.ssh_handler)
                     self.sync_ops = SyncOperations(
@@ -97,13 +106,23 @@ class ConnectionHandler:
             
     def _get_password(self) -> Optional[str]:
         """Get SSH password from cache or user."""
+        # First try cached password
         if SSHCredentials._cached_password:
+            self.logger.debug("Using cached password")
             return SSHCredentials._cached_password
             
+        # If no cached password, prompt user
+        self.logger.debug("Prompting for password")
         dialog = PasswordDialog()
         result = dialog.get_credentials()
         
-        return result.password if result.accepted else None
+        if result.accepted and result.password:
+            self.logger.debug("Got new password from user")
+            SSHCredentials._cached_password = result.password
+            return result.password
+            
+        self.logger.debug("Password dialog cancelled")
+        return None
         
     def cleanup(self):
         """Clean up connection resources."""

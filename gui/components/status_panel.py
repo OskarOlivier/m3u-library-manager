@@ -98,7 +98,7 @@ class StatusPanel(QWidget):
         
     def update_progress(self, value: int):
         """Update progress bar."""
-        if not self.progress_bar.isVisible():
+        if not self.progress_bar.isVisible() and value > 0:
             self.progress_bar.setVisible(True)
         self.progress_bar.setValue(value)
         

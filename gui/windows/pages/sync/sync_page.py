@@ -1,5 +1,4 @@
 # gui/windows/pages/sync/sync_page.py
-
 from PyQt6.QtWidgets import QVBoxLayout, QHBoxLayout, QWidget, QFrame
 from PyQt6.QtCore import Qt
 from pathlib import Path
@@ -7,7 +6,7 @@ import logging
 
 from app.config import Config
 from gui.windows.pages import BasePage
-from gui.components import StatusPanel  # Changed this import
+from gui.components import StatusPanel
 from .components import PlaylistPanel, FileListPanel
 from .state import SyncPageState
 from .handlers import ConnectionHandler, AnalysisHandler, SyncHandler
@@ -21,8 +20,15 @@ class SyncPage(BasePage):
         self.connection = ConnectionHandler()
         self.analysis_handler = AnalysisHandler(self.state, self.connection)
         self.sync_handler = SyncHandler(self.state, self.connection)
-        super().__init__()
         
+        # Initialize file list panel before super().__init__()
+        self.file_list_panel = FileListPanel(
+            self.state,
+            on_sync=lambda operation, files: self.sync_handler.sync_files(operation, files)
+        )
+        
+        super().__init__()
+            
     def setup_ui(self):
         """Set up the main UI layout."""
         # Create main layout
@@ -46,16 +52,13 @@ class SyncPage(BasePage):
         
         # Initialize panels
         self.playlist_panel = PlaylistPanel(
-            self.state,
-            on_analyze=self.analysis_handler.analyze_playlist,
-            on_analyze_all=lambda: self.analysis_handler.analyze_all_playlists(Path(Config.PLAYLISTS_DIR))
+            state=self.state,
+            on_analyze_all=lambda: self.analysis_handler.analyze_all_playlists(Path(Config.PLAYLISTS_DIR)),
+            on_upload=self.sync_handler.upload_playlist,
+            parent=self  # Add parent parameter
         )
         
-        self.file_list_panel = FileListPanel(
-            self.state,
-            on_sync=self.sync_handler.sync_files
-        )
-        
+        # Create status panel before adding to layout
         self.status_panel = StatusPanel(self.state)
         
         # Create and style panel frames

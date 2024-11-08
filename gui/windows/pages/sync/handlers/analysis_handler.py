@@ -77,8 +77,7 @@ class AnalysisHandler(AsyncOperation):
             analysis = PlaylistAnalysis(
                 missing_remotely=result.missing_remotely,
                 missing_locally=result.missing_locally,
-                is_synced=len(result.missing_remotely) == 0 and len(result.missing_locally) == 0,
-                exists_remotely=True
+                exists_remotely=result.exists_remotely  # Use the result's exists_remotely value
             )
             
             self.logger.debug("Caching results")
@@ -103,7 +102,6 @@ class AnalysisHandler(AsyncOperation):
             return PlaylistAnalysis(
                 missing_remotely=set(),
                 missing_locally=set(),
-                is_synced=False,
                 exists_remotely=False
             )
         except Exception as e:
@@ -143,74 +141,66 @@ class AnalysisHandler(AsyncOperation):
             _analyze(),
             progress_callback=self.state.update_progress
         )
-        
+
     def analyze_all_playlists(self, playlists_dir: Path):
-        """Start analysis of all playlists."""
+        """Start analysis of all playlists in directory."""
         self.logger.info("Starting bulk playlist analysis")
-        
+
         # Check connection before starting
         if not self._check_connection():
             return
-        
+
         async def _analyze_all():
-            self.state.is_analyzing = True
-            self.state.analysis_all_started.emit()
-            
             try:
-                self.logger.debug("Getting playlist list")
-                playlists = sorted(p for p in playlists_dir.glob("*.m3u")
-                                 if p.name != "Love.bak.m3u")
-                
-                self.logger.info(f"Found {len(playlists)} playlists to analyze")
-                total = len(playlists)
-                failed_playlists = []
-                
+                # Get regular playlists (excluding backups and unplaylisted)
+                from utils.playlist import get_regular_playlists
+                playlists = get_regular_playlists(playlists_dir)
+                total_playlists = len(playlists)
+
+                if not playlists:
+                    self.state.report_error("No playlists found")
+                    return
+
+                # Start bulk analysis
+                self.state.is_analyzing = True
+                self.state.analysis_all_started.emit()
+                self.state.start_bulk_analysis(total_playlists)
+
                 for i, playlist in enumerate(playlists, 1):
                     if not self.current_worker or not self.current_worker._is_running:
-                        self.logger.debug("Bulk analysis cancelled")
+                        self.logger.debug("Analysis cancelled")
                         break
-                        
-                    progress = int((i - 1) / total * 100)
-                    self.state.update_progress(progress)
-                    self.state.set_status(f"Analyzing {playlist.name}...")
-                    
+
                     try:
-                        self.logger.info(f"Analyzing playlist {i}/{total}: {playlist.name}")
+                        # Update progress
+                        progress = int((i - 1) / total_playlists * 100)
+                        self.state.update_progress(progress)
+                        self.state.set_status(f"Analyzing {playlist.name}...")
+
+                        # Analyze playlist
                         analysis = await self._analyze_playlist(playlist)
-                        
                         if analysis:
-                            self.logger.debug(f"Setting analysis for {playlist.name}")
                             self.state.set_analysis(playlist, analysis)
-                            
-                            if not analysis.exists_remotely:
-                                failed_playlists.append(playlist.name)
-                                
+
+                        # Update progress again after completion
+                        self.state.update_analysis_progress(playlist)
+
                     except Exception as e:
                         self.logger.error(f"Error analyzing {playlist.name}: {e}")
-                        failed_playlists.append(playlist.name)
-                        continue  # Continue with next playlist
-                    
-                    self.logger.debug("Processing events")
-                    await asyncio.sleep(0)
-                    
-                if self.current_worker and self.current_worker._is_running:
-                    self.logger.info("Bulk analysis completed")
-                    self.state.update_progress(100)
-                    
-                    if failed_playlists:
-                        failed_msg = f"Failed to analyze {len(failed_playlists)} playlists: {', '.join(failed_playlists)}"
-                        self.logger.warning(failed_msg)
-                        self.state.report_error(failed_msg)
-                    
+                        continue
+
+                # Final progress update
+                self.state.update_progress(100)
+                self.state.set_status("Analysis complete")
+
             except Exception as e:
-                self.logger.error(f"Bulk analysis failed: {str(e)}", exc_info=True)
+                self.logger.error(f"Bulk analysis failed: {e}")
                 self.state.report_error(f"Bulk analysis failed: {str(e)}")
-                
+
             finally:
                 self.state.is_analyzing = False
-                self.state.analysis_all_completed.emit()
-                self.logger.info("Bulk analysis operation finished")
-                
+                self.state.finish_analysis()
+
         self._start_operation(
             _analyze_all(),
             progress_callback=self.state.update_progress

@@ -216,6 +216,23 @@ class FileListPanel:
         self.state.sync_started.connect(lambda _: self.set_buttons_enabled(False))
         self.state.sync_completed.connect(lambda: self.set_buttons_enabled(True))
         
+        # Add this new connection for playlist selection
+        self.state.playlist_selected.connect(self.on_playlist_selected)
+
+    def on_playlist_selected(self, playlist_path: Path):
+        """Handle playlist selection."""
+        if not playlist_path:
+            self.clear_panels()
+            return
+            
+        # Get existing analysis if available
+        analysis = self.state.get_analysis(playlist_path)
+        if analysis:
+            # Update panels with existing analysis
+            self.remote_panel.add_files(analysis.missing_remotely)
+            self.local_panel.add_files(analysis.missing_locally)
+            self.set_buttons_enabled(analysis.has_differences)
+        
     def clear_panels(self):
         """Clear both panels."""
         self.remote_panel.clear()
@@ -243,3 +260,5 @@ class FileListPanel:
             
             # Enable buttons if there are differences
             self.set_buttons_enabled(analysis.has_differences)
+            
+            

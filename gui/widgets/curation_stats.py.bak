@@ -21,7 +21,7 @@ class StatsWidget(QWidget):
         layout.addStretch()
         
         # Stats labels
-        self.total_tracks = QLabel("Total tracks: 0")
+        self.total_tracks = QLabel("Total tracks in playlists: 0")
         self.total_tracks.setFont(QFont("Segoe UI", 10))
         self.total_tracks.setStyleSheet("color: #999999;")
         

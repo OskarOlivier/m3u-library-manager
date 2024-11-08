@@ -13,19 +13,37 @@ class SongHandler(QObject):
         super().__init__()
         self.state = state
         self.logger = logging.getLogger('song_handler')
+        self.update_timer = None
+        self._create_timer()
         
-        # Create update timer
+    def _create_timer(self):
+        """Create the update timer."""
+        if self.update_timer is not None:
+            self.stop()
+            
         self.update_timer = QTimer()
         self.update_timer.timeout.connect(self.check_current_song)
         
     def start(self):
         """Start song detection."""
+        if self.update_timer is None:
+            self._create_timer()
         self.update_timer.start(1000)
         
     def stop(self):
         """Stop song detection."""
-        self.update_timer.stop()
+        if self.update_timer is not None:
+            self.update_timer.stop()
+            self.update_timer.deleteLater()
+            self.update_timer = None
         
+    def cleanup(self):
+        """Clean up resources."""
+        try:
+            self.stop()
+        except Exception as e:
+            self.logger.error(f"Error cleaning up song handler: {e}")
+            
     def check_current_song(self):
         """Check for currently playing song."""
         try:
@@ -67,7 +85,3 @@ class SongHandler(QObject):
                 
         except Exception as e:
             self.logger.error(f"Error updating highlights: {e}")
-            
-    def cleanup(self):
-        """Clean up resources."""
-        self.stop()
