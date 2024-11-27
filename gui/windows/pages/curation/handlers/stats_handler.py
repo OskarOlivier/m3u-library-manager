@@ -55,3 +55,15 @@ class StatsHandler(QObject):
         if self.is_running:
             self.logger.info("Stopping stats calculation")
             self.is_running = False
+            
+    def cleanup(self):
+        """Clean up resources."""
+        try:
+            self.logger.debug("Cleaning up stats handler")
+            # Stop any running analysis
+            if self.is_running:
+                self.logger.debug("Stopping stats calculation")
+                self.stop_analysis()
+            # Clear any timers or handlers if added in future
+        except Exception as e:
+            self.logger.error(f"Error during stats handler cleanup: {e}")

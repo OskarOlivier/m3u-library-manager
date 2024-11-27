@@ -4,15 +4,18 @@ import subprocess
 import logging
 from pathlib import Path
 from dataclasses import dataclass
-from typing import Tuple, Optional
+from typing import Tuple, Optional, Dict, Any
+import asyncio
+import tempfile
+from utils.m3u.parser import read_m3u, write_m3u, _normalize_path
 
 @dataclass
 class SSHCredentials:
-    """SSH connection credentials"""
+    """SSH connection credentials with caching."""
     host: str
     username: str
     password: str
-    remote_path: str
+    remote_path: str = "/media/CHIA/Music"  # Remote music library root
     
     # Class variable to cache password
     _cached_password: Optional[str] = None
@@ -22,22 +25,37 @@ class SSHCredentials:
         if hasattr(self, 'password') and self.password:
             SSHCredentials._cached_password = self.password
 
+    def get_remote_path(self, relative_path: str) -> str:
+        """
+        Convert a relative path to a full remote POSIX path.
+        
+        Args:
+            relative_path: Path relative to music library root
+            
+        Returns:
+            Full remote path with forward slashes
+        """
+        # Normalize to relative form and ensure forward slashes
+        normalized = _normalize_path(relative_path).replace('\\', '/')
+        return f"{self.remote_path}/{normalized}"
+
 class SSHHandler:
-    """Handles SSH operations using plink"""
+    """Handles SSH operations using plink/pscp with consistent path handling."""
     
     def __init__(self, credentials: SSHCredentials):
         self.credentials = credentials
+        
+        # Set up logging
         self.logger = logging.getLogger('ssh_handler')
         self.logger.setLevel(logging.DEBUG)
         
-        # Add console handler if not already present
         if not self.logger.handlers:
             console_handler = logging.StreamHandler()
             console_handler.setLevel(logging.DEBUG)
             formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
             console_handler.setFormatter(formatter)
             self.logger.addHandler(console_handler)
-        
+
     def test_connection(self, invalidate_on_fail: bool = True) -> Tuple[bool, Optional[str]]:
         """
         Test SSH connection with potential password cache invalidation.
@@ -46,7 +64,7 @@ class SSHHandler:
             invalidate_on_fail: Whether to invalidate cached password on failure
             
         Returns:
-            Tuple[bool, Optional[str]]: (success, error_message)
+            (success, error_message)
         """
         self.logger.debug("Testing SSH connection")
         try:
@@ -56,7 +74,7 @@ class SSHHandler:
                 f'{self.credentials.username}@{self.credentials.host}',
                 '-pw',
                 self.credentials.password,
-                '-batch',  # Non-interactive mode
+                '-batch',
                 'echo "Connection test"'
             ]
             
@@ -76,7 +94,7 @@ class SSHHandler:
             error_msg = result.stderr.lower()
             if "authentication failed" in error_msg or "access denied" in error_msg:
                 if invalidate_on_fail:
-                    SSHCredentials._cached_password = None  # Clear cached password
+                    SSHCredentials._cached_password = None
                 return False, "Authentication failed - please check your password"
             
             self.logger.error(f"SSH connection test failed: {result.stderr}")
@@ -90,7 +108,7 @@ class SSHHandler:
             return False, str(e)
 
     def verify_remote_path(self) -> bool:
-        """Verify remote path exists and is accessible."""
+        """Verify remote music library root exists and is accessible."""
         try:
             cmd = [
                 'plink',
@@ -103,44 +121,29 @@ class SSHHandler:
             ]
             
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
-            return result.returncode == 0 and "exists" in result.stdout
+            exists = result.returncode == 0 and "exists" in result.stdout
+            
+            if not exists:
+                self.logger.error(f"Remote music library not found: {self.credentials.remote_path}")
+            
+            return exists
             
         except Exception as e:
             self.logger.error(f"Failed to verify remote path: {e}")
             return False
 
-    def copy_to_remote(self, local_path: Path, remote_path: str) -> bool:
-        """Copy file to remote location using pscp."""
-        try:
-            self.logger.debug(f"Copying {local_path} to {remote_path}")
-            cmd = [
-                'pscp',
-                '-pw', self.credentials.password,
-                str(local_path),
-                f'{self.credentials.username}@{self.credentials.host}:{remote_path}'
-            ]
-            
-            self.logger.debug(f"Running command: pscp [password hidden] {str(local_path)} {self.credentials.username}@{self.credentials.host}:{remote_path}")
-            result = subprocess.run(cmd, capture_output=True, text=True)
-            
-            if result.returncode != 0:
-                self.logger.error(f"Error copying to remote: {result.stderr}")
-                return False
-                
-            self.logger.debug("File copied successfully")
-            return True
-            
-        except Exception as e:
-            self.logger.error(f"Failed to copy to remote: {e}")
-            return False
-            
     def copy_from_remote(self, remote_path: str, local_path: Path) -> bool:
-        """Copy file from remote location using pscp."""
-        try:
-            self.logger.debug(f"Starting remote fetch operation")
-            self.logger.debug(f"Fetching {remote_path} to {local_path}")
+        """
+        Copy a file from remote to local using pscp.
+        
+        Args:
+            remote_path: Path to remote file
+            local_path: Local destination path
             
-            # Construct command
+        Returns:
+            bool: True if successful
+        """
+        try:
             cmd = [
                 'pscp',
                 '-pw', self.credentials.password,
@@ -148,23 +151,13 @@ class SSHHandler:
                 str(local_path)
             ]
             
-            self.logger.debug("Executing pscp command...")
-            
-            # Add timeout to prevent hanging
             result = subprocess.run(
                 cmd, 
                 capture_output=True, 
                 text=True,
-                timeout=30  # 30 second timeout
+                timeout=30
             )
             
-            self.logger.debug(f"pscp return code: {result.returncode}")
-            if result.stdout:
-                self.logger.debug(f"pscp stdout: {result.stdout}")
-            if result.stderr:
-                self.logger.debug(f"pscp stderr: {result.stderr}")
-            
-            # Handle "no such file" error specifically
             if "no such file" in result.stderr.lower():
                 self.logger.debug(f"Remote file not found: {remote_path}")
                 return False
@@ -173,7 +166,6 @@ class SSHHandler:
                 self.logger.error(f"Error copying from remote: {result.stderr}")
                 return False
                 
-            self.logger.debug("File copied successfully")
             return True
             
         except subprocess.TimeoutExpired:
@@ -181,10 +173,48 @@ class SSHHandler:
             return False
         except Exception as e:
             self.logger.error(f"Failed to copy from remote: {e}")
-        return False
+            return False
+
+    def copy_to_remote(self, local_path: Path, remote_path: str) -> bool:
+        """
+        Copy a file from local to remote using pscp.
         
-    def delete_remote_file(self, remote_path: str) -> bool:
-        """Delete file from remote location."""
+        Args:
+            local_path: Path to local file
+            remote_path: Remote destination path
+            
+        Returns:
+            bool: True if successful
+        """
+        try:
+            cmd = [
+                'pscp',
+                '-pw', self.credentials.password,
+                str(local_path),
+                f'{self.credentials.username}@{self.credentials.host}:{remote_path}'
+            ]
+            
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            if result.returncode != 0:
+                self.logger.error(f"Error copying to remote: {result.stderr}")
+                return False
+                
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"Failed to copy to remote: {e}")
+            return False
+
+    async def run_command(self, command: str) -> subprocess.CompletedProcess:
+        """
+        Run a command on the remote system asynchronously.
+        
+        Args:
+            command: Command to execute
+            
+        Returns:
+            CompletedProcess with command result
+        """
         try:
             cmd = [
                 'plink',
@@ -193,16 +223,30 @@ class SSHHandler:
                 '-pw',
                 self.credentials.password,
                 '-batch',
-                f'rm "{remote_path}"'
+                command
             ]
             
-            result = subprocess.run(cmd, capture_output=True, text=True)
-            if result.returncode != 0:
-                self.logger.error(f"Error deleting remote file: {result.stderr}")
-                return False
-                
-            return True
+            # Run command asynchronously
+            process = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            
+            stdout, stderr = await process.communicate()
+            
+            return subprocess.CompletedProcess(
+                args=cmd,
+                returncode=process.returncode,
+                stdout=stdout.decode() if stdout else '',
+                stderr=stderr.decode() if stderr else ''
+            )
             
         except Exception as e:
-            self.logger.error(f"Failed to delete remote file: {e}")
-            return False
+            self.logger.error(f"Failed to run command: {e}")
+            return subprocess.CompletedProcess(
+                args=cmd,
+                returncode=1,
+                stdout='',
+                stderr=str(e)
+            )

@@ -1,150 +1,202 @@
 # gui/windows/pages/maintenance/components/file_locator_panel.py
 
-from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
-                           QPushButton, QListWidget, QListWidgetItem, QFrame)
-from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtGui import QFont, QColor
 from pathlib import Path
-from typing import List, Optional, Set
+from typing import Optional, Set, Dict
+from PyQt6.QtCore import pyqtSignal, Qt
+from PyQt6.QtWidgets import QWidget, QHBoxLayout, QVBoxLayout
 
-class FileListWidget(QListWidget):
-    """Custom list widget for file display with selection handling"""
-    
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setup_ui()
-        
-    def setup_ui(self):
-        """Set up the list widget UI"""
-        self.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)
-        self.setStyleSheet("""
-            QListWidget {
-                background-color: #2D2D2D;
-                border: none;
-                border-radius: 2px;
-                padding: 4px;
-            }
-            QListWidget::item {
-                color: white;
-                padding: 6px;
-                margin: 2px;
-                border-radius: 2px;
-            }
-            QListWidget::item:hover {
-                background-color: #404040;
-            }
-            QListWidget::item:selected {
-                background-color: #0078D4;
-            }
-        """)
+from gui.components.panels.base_file_panel import BaseFilePanel
+from gui.components.styles.colors import (
+   SUCCESS_COLOR,
+   ERROR_COLOR,
+   WARNING_COLOR,
+   PRIMARY_ACCENT
+)
 
-class FileLocatorPanel(QWidget):
-    """Panel for displaying and managing file lists"""
+class FileLocatorPanel(BaseFilePanel):
+    """Panel for handling missing files with location suggestions."""
     
-    filesLocated = pyqtSignal(list)  # Emits list of located files
-    progressUpdated = pyqtSignal(int)
+    # Signals
+    locate_requested = pyqtSignal(object)  # Request to locate files
+    scan_requested = pyqtSignal(object)    # Request to scan locations
+    repair_requested = pyqtSignal(object)  # Request to repair file references
+    alternative_selected = pyqtSignal(object, object)  # Selected alternative location
     
-    def __init__(self, state, parent=None):
-        super().__init__(parent)
+    def __init__(self, state, parent: Optional[QWidget] = None):
+        # Instance variables that need to be set before parent init
         self.state = state
-        self.current_files: Set[Path] = set()
-        self.setup_ui()
+        self.sync_direction = 'both'
+        self.alternatives: Dict[Path, Set[Path]] = {}  # Initialize alternatives dict
+        self.add_remote_btn = None
+        self.delete_local_btn = None
+        self.add_local_btn = None
+        self.delete_remote_btn = None
+        self.verify_btn = None
         
-    def setup_ui(self):
-        """Set up the panel UI"""
-        layout = QVBoxLayout(self)
-        layout.setSpacing(8)
-        layout.setContentsMargins(0, 0, 0, 0)
+        # Call parent init which will call setup_action_buttons
+        super().__init__(title="Missing Files", parent=parent)
         
-        # Header
-        header = QHBoxLayout()
+    def setup_action_buttons(self):
+        """Set up sync-specific action buttons."""
+        # Scan button
+        self.scan_btn = self._create_button(
+            "Scan Library",
+            lambda: self._request_scan()
+        )
         
-        title = QLabel("Missing Files")
-        title.setFont(QFont("Segoe UI", 11))
-        title.setStyleSheet("color: white;")
-        header.addWidget(title)
+        # Locate button
+        self.locate_btn = self._create_button(
+            "Locate Selected",
+            lambda: self._request_locate()
+        )
         
-        # File count
-        self.count_label = QLabel("0 files")
-        self.count_label.setFont(QFont("Segoe UI", 10))
-        self.count_label.setStyleSheet("color: #999999;")
-        self.count_label.setAlignment(Qt.AlignmentFlag.AlignRight)
-        header.addWidget(self.count_label)
+        # Repair button
+        self.repair_btn = self._create_button(
+            "Repair References",
+            lambda: self._request_repair()
+        )
         
-        layout.addLayout(header)
+        # Add buttons to layout
+        self.action_layout.addWidget(self.scan_btn)
+        self.action_layout.addWidget(self.locate_btn)
+        self.action_layout.addWidget(self.repair_btn)
         
-        # File list
-        self.file_list = FileListWidget()
-        layout.addWidget(self.file_list)
+        # Initially disable action buttons
+        self._update_button_states()
+        
+        # Add filter buttons
+        filter_layout = self.create_filter_section()
+        self.action_layout.addLayout(filter_layout)
+        
+    def create_filter_section(self):
+        """Create filter buttons for different file states."""
+        filter_layout = QHBoxLayout()
+        filter_layout.setSpacing(4)
+        
+        # Filter by state buttons
+        self.show_all_btn = self._create_button(
+            "All",
+            lambda: self.filter_files("all")
+        )
+        self.show_unlocated_btn = self._create_button(
+            "Unlocated",
+            lambda: self.filter_files("unlocated")
+        )
+        self.show_alternatives_btn = self._create_button(
+            "Has Alternatives",
+            lambda: self.filter_files("alternatives")
+        )
+        
+        filter_layout.addWidget(self.show_all_btn)
+        filter_layout.addWidget(self.show_unlocated_btn)
+        filter_layout.addWidget(self.show_alternatives_btn)
+        
+        return filter_layout
+        
+    def _request_locate(self):
+        """Request location search for selected files."""
+        files = self.get_selected_files()
+        if files:
+            self.locate_requested.emit(files)
+            
+    def _request_scan(self):
+        """Request library scan for selected files."""
+        files = self.get_checked_files()
+        if files:
+            self.scan_requested.emit(files)
+            
+    def _request_repair(self):
+        """Request repair of file references."""
+        # Only repair files that have alternatives
+        files = {f for f in self.get_checked_files() 
+                if f in self.alternatives and self.alternatives[f]}
+        if files:
+            self.repair_requested.emit(files)
+            
+    def _update_button_states(self):
+        """Update button enabled states based on selection and available actions."""
+        has_selected = bool(self.get_selected_files())
+        has_checked = bool(self.get_checked_files())
+        has_alternatives = any(self.alternatives.get(f) 
+                             for f in self.get_checked_files())
+        
+        # Selection buttons
+        self.check_all_btn.setEnabled(bool(self.files))
+        self.uncheck_all_btn.setEnabled(has_checked)
         
         # Action buttons
-        button_layout = QHBoxLayout()
+        self.locate_btn.setEnabled(has_selected)
+        self.scan_btn.setEnabled(has_checked)
+        self.repair_btn.setEnabled(has_checked and has_alternatives)
         
-        self.locate_btn = QPushButton("Locate Files")
-        self.locate_btn.clicked.connect(self.on_locate_clicked)
+    def set_alternatives(self, original_path: Path, alternative_paths: Set[Path]):
+        """Set alternative locations for a missing file."""
+        self.alternatives[original_path] = alternative_paths
         
-        self.clear_btn = QPushButton("Clear List")
-        self.clear_btn.clicked.connect(self.clear_files)
+        # Update visual state
+        for i in range(self.file_list.count()):
+            item = self.file_list.item(i)
+            widget = self.file_list.itemWidget(item)
+            if widget and widget.file_path == original_path:
+                if alternative_paths:
+                    widget.set_status_color(WARNING_COLOR)
+                else:
+                    widget.set_status_color(ERROR_COLOR)
+                break
+                
+    def start_location_search(self, files: Set[Path]):
+        """Start file location search visual state."""
+        self.set_loading(True)
+        self._set_files_status(files, PRIMARY_ACCENT)
+        self._disable_actions()
         
-        for btn in [self.locate_btn, self.clear_btn]:
-            btn.setFont(QFont("Segoe UI", 10))
-            btn.setStyleSheet("""
-                QPushButton {
-                    background-color: #2D2D2D;
-                    color: white;
-                    border: none;
-                    border-radius: 2px;
-                    padding: 8px 16px;
-                }
-                QPushButton:hover {
-                    background-color: #404040;
-                }
-                QPushButton:pressed {
-                    background-color: #505050;
-                }
-                QPushButton:disabled {
-                    background-color: #1A1A1A;
-                    color: #666666;
-                }
-            """)
-            button_layout.addWidget(btn)
+    def finish_location_search(self, found: Dict[Path, Set[Path]], not_found: Set[Path]):
+        """Update visual state after location search completion."""
+        self.set_loading(False)
+        
+        # Update alternatives and visual state
+        for original, alternatives in found.items():
+            self.set_alternatives(original, alternatives)
             
-        layout.addLayout(button_layout)
+        self._set_files_status(not_found, ERROR_COLOR)
+        self._update_button_states()
         
-    def set_files(self, files: List[Path]):
-        """Update the file list display"""
-        self.file_list.clear()
-        self.current_files = set(files)
-        
-        for file_path in sorted(files):
-            item = QListWidgetItem(file_path.name)
-            item.setData(Qt.ItemDataRole.UserRole, str(file_path))
-            self.file_list.addItem(item)
+    def _set_files_status(self, files: Set[Path], color: str):
+        """Set status color for specified files."""
+        for file_path in files:
+            for i in range(self.file_list.count()):
+                item = self.file_list.item(i)
+                widget = self.file_list.itemWidget(item)
+                if widget and widget.file_path == file_path:
+                    widget.set_status_color(color)
+                    break
+                    
+    def _disable_actions(self):
+        """Disable all action buttons during operations."""
+        for button in [self.scan_btn, self.locate_btn, self.repair_btn,
+                      self.check_all_btn, self.uncheck_all_btn]:
+            button.setEnabled(False)
             
-        self.count_label.setText(f"{len(files)} files")
-        self.locate_btn.setEnabled(len(files) > 0)
-        
-    def clear_files(self):
-        """Clear the file list"""
-        self.file_list.clear()
-        self.current_files.clear()
-        self.count_label.setText("0 files")
-        self.locate_btn.setEnabled(False)
-        
-    def get_selected_files(self) -> List[Path]:
-        """Get list of selected file paths"""
-        selected = []
-        for item in self.file_list.selectedItems():
-            path = Path(item.data(Qt.ItemDataRole.UserRole))
-            selected.append(path)
-        return selected
-    
-    def on_locate_clicked(self):
-        """Handle locate button click"""
-        selected = self.get_selected_files()
-        if selected:
-            self.filesLocated.emit(selected)
+    def filter_files(self, filter_type: str):
+        """Filter displayed files based on their state."""
+        for i in range(self.file_list.count()):
+            item = self.file_list.item(i)
+            widget = self.file_list.itemWidget(item)
+            if not widget:
+                continue
+                
+            show = False
+            if filter_type == 'all':
+                show = True
+            elif filter_type == 'unlocated':
+                show = widget.file_path not in self.alternatives
+            elif filter_type == 'alternatives':
+                show = (widget.file_path in self.alternatives and 
+                       bool(self.alternatives[widget.file_path]))
+                
+            item.setHidden(not show)
             
-    def update_progress(self, value: int):
-        """Update progress value"""
-        self.progressUpdated.emit(value)
+    def cleanup(self):
+        """Clean up resources."""
+        super().cleanup()
+        self.alternatives.clear()

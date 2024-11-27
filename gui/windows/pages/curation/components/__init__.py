@@ -2,7 +2,7 @@
 """Components for curation page."""
 
 from .playlist_grid import PlaylistGrid
-from .song_info import SongInfoPanel
+from .song_info_panel import SongInfoPanel  # Updated import path
 from .stats_panel import StatsPanel
 
 __all__ = [

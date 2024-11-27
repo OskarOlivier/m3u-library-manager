@@ -1,4 +1,4 @@
-# gui/windows/pages/sync/components/safety_dialogs.py
+# gui/windows/pages/sync/components.safety_dialogs.py
 
 from PyQt6.QtWidgets import QMessageBox
 from pathlib import Path

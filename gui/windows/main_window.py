@@ -2,18 +2,26 @@
 
 from PyQt6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
                            QLabel, QStackedWidget, QApplication, QPushButton)
-from PyQt6.QtCore import Qt, QPoint, QTimer
-from PyQt6.QtGui import QFont
+from PyQt6.QtCore import Qt, QPoint, QTimer, QSize, QRect
+from PyQt6.QtGui import QFont, QScreen
 from pathlib import Path
 import logging
 
-from .pages.base import BasePage
-from .pages.curation import CurationPage
+from core.events.event_bus import EventBus  
+from core.cache.relationship_cache import RelationshipCache
+from .pages.base_page import BasePage
+from .pages.curation.curation_page import CurationPage
 from .pages.sync.sync_page import SyncPage
-from .pages.explore.explore_page import ExplorePage
 from .pages.maintenance.maintenance_page import MaintenancePage
+from .pages.explore.explore_page import ExplorePage
+from .pages.proximity.proximity_page import ProximityPage
 from utils.cache.cleanup import get_unplaylisted_size
 from app.config import Config
+
+# Title bar height constants
+TITLE_BAR_HEIGHT = 46
+NAV_BAR_HEIGHT = 40
+HEADER_HEIGHT = TITLE_BAR_HEIGHT + NAV_BAR_HEIGHT
 
 class NavigationButton(QLabel):
     """Custom navigation button with highlight states"""
@@ -55,44 +63,68 @@ class NavigationButton(QLabel):
 
 class MainWindow(QMainWindow):
     def __init__(self):
-        super().__init__(flags=Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint)
+        super().__init__(flags=Qt.WindowType.FramelessWindowHint)
+
+        # Initialize logger
+        self.logger = logging.getLogger('MainWindow')
+
+        # Get core system instances
+        self.event_bus = EventBus.get_instance()
+        self.cache = RelationshipCache.get_instance()
+        
+        # Initialize tracking variables
         self.oldPos = None
         self.pages = {}
         self.nav_buttons = {}
         self.current_page = None
         self.is_quitting = False
-        self.logger = logging.getLogger('MainWindow')
-        
+
         # Initialize pages first
         self.init_pages()
         self.setup_ui()
-        self.center_on_screen()
+        
+        # Set up fullscreen
+        self.make_fullscreen()
         
         # Setup cleanup button update timer
         self.cleanup_update_timer = QTimer(self)
         self.cleanup_update_timer.timeout.connect(self.update_cleanup_button)
         self.cleanup_update_timer.start(5000)  # Update every 5 seconds
         self.update_cleanup_button()
+
+        # Connect cache events
+        self.cache.initialized.connect(self._on_cache_initialized)
+        self.cache.error_occurred.connect(self._on_cache_error)
+        self.event_bus.event_occurred.connect(self._handle_event)
         
-    def init_pages(self):
-        """Initialize all pages before UI setup"""
+    def make_fullscreen(self):
+        """Set up fullscreen mode within screen constraints."""
         try:
-            self.pages = {
-                'curation': CurationPage(),
-                'sync': SyncPage(),
-                'maintenance': MaintenancePage(),
-                'explore': ExplorePage()
-            }
-            self.logger.debug(f"Initialized pages: {list(self.pages.keys())}")
+            screen = QApplication.primaryScreen()
+            if not screen:
+                self.logger.error("No screen detected")
+                return
+
+            # Get available geometry (excludes taskbar)
+            available_geometry = screen.availableGeometry()
+            self.logger.debug(f"Screen available geometry: {available_geometry}")
+
+            # Set window geometry to match available screen space
+            self.setGeometry(available_geometry)
+            
+            # Set minimum size to prevent window from being too small
+            min_width = min(1024, available_geometry.width())
+            min_height = min(768, available_geometry.height())
+            self.setMinimumSize(min_width, min_height)
+            
+            # Show maximized
+            self.showMaximized()
+            
         except Exception as e:
-            self.logger.error(f"Error initializing pages: {e}", exc_info=True)
-            raise
-        
+            self.logger.error(f"Error setting up fullscreen: {e}", exc_info=True)
+                   
     def setup_ui(self):
-        """Set up the main UI."""
-        self.setWindowTitle("M3U Library Manager")
-        self.setGeometry(100, 100, 1000, 700)
-        
+        """Set up the main UI with fullscreen layout."""
         # Main widget and layout
         main_widget = QWidget()
         self.setCentralWidget(main_widget)
@@ -100,15 +132,17 @@ class MainWindow(QMainWindow):
         layout.setSpacing(0)
         layout.setContentsMargins(0, 0, 0, 0)
         
-        # Header with title, navigation, and close button
+        # Header (title bar + navigation)
         header = QWidget()
+        header.setFixedHeight(HEADER_HEIGHT)
         header.setStyleSheet("background-color: #1E1E1E;")
         header_layout = QVBoxLayout(header)
         header_layout.setSpacing(0)
         header_layout.setContentsMargins(0, 0, 0, 0)
         
-        # Title bar with close button
+        # Title bar setup
         title_bar = QWidget()
+        title_bar.setFixedHeight(TITLE_BAR_HEIGHT)
         title_layout = QHBoxLayout(title_bar)
         title_layout.setContentsMargins(16, 8, 8, 8)
         
@@ -160,10 +194,9 @@ class MainWindow(QMainWindow):
         close_btn.mousePressEvent = lambda e: self.hide()
         title_layout.addWidget(close_btn)
         
-        header_layout.addWidget(title_bar)
-        
-        # Navigation bar
+        # Navigation bar setup
         nav_bar = QWidget()
+        nav_bar.setFixedHeight(NAV_BAR_HEIGHT)
         nav_layout = QHBoxLayout(nav_bar)
         nav_layout.setContentsMargins(16, 0, 16, 0)
         nav_layout.setSpacing(24)
@@ -173,7 +206,8 @@ class MainWindow(QMainWindow):
             ('curation', "Curation"),
             ('sync', "Sync"),
             ('maintenance', "Maintenance"),
-            ('explore', "Explore")
+            ('explore', "Explore"),
+            ('proximity', "Proximity")
         ]
         
         self.nav_buttons = {}
@@ -181,13 +215,14 @@ class MainWindow(QMainWindow):
             btn = NavigationButton(label)
             self.nav_buttons[page_id] = btn
             nav_layout.addWidget(btn)
-            # Using partial to capture the page_id correctly
             from functools import partial
             btn.mousePressEvent = partial(self._on_nav_click, page_id)
             
         nav_layout.addStretch()
-        header_layout.addWidget(nav_bar)
         
+        # Add title bar and nav bar to header
+        header_layout.addWidget(title_bar)
+        header_layout.addWidget(nav_bar)
         layout.addWidget(header)
         
         # Content area
@@ -202,7 +237,79 @@ class MainWindow(QMainWindow):
         
         # Start with curation page
         self.switch_page('curation')
+       
+    def init_pages(self):
+        """Initialize all pages."""
+        try:
+            self.logger.debug("Initializing pages")
+            self.pages = {
+                'curation': CurationPage(),
+                'sync': SyncPage(),
+                'maintenance': MaintenancePage(),
+                'explore': ExplorePage(),
+                'proximity': ProximityPage()
+            }
+            self.logger.debug(f"Initialized pages: {list(self.pages.keys())}")
+        except Exception as e:
+            self.logger.error(f"Error initializing pages: {e}")
+            raise
 
+    def _on_cache_initialized(self):
+        """Handle cache initialization completion."""
+        self.logger.info("Cache initialization complete")
+        # Notify pages that need cache data
+        if 'curation' in self.pages:
+            self.pages['curation'].refresh_playlists()
+        if 'proximity' in self.pages:
+            self.pages['proximity'].update_visualization()
+
+    def _on_cache_error(self, error: str):
+        """Handle cache errors."""
+        self.logger.error(f"Cache error: {error}")
+
+    def _handle_event(self, event):
+        """Handle events from the event bus."""
+        # Forward relevant events to current page
+        if self.current_page and self.current_page in self.pages:
+            current_page = self.pages[self.current_page]
+            if hasattr(current_page, 'handle_event'):
+                current_page.handle_event(event)
+
+    def cleanup_application(self):
+        """Clean up resources when application is actually quitting."""
+        try:
+            self.logger.debug("Starting application cleanup")
+            
+            # Stop cleanup timer
+            if hasattr(self, 'cleanup_update_timer'):
+                self.cleanup_update_timer.stop()
+
+            # Clean up current page
+            if self.current_page and self.pages.get(self.current_page):
+                page = self.pages[self.current_page]
+                if hasattr(page, 'cleanup'):
+                    self.logger.debug(f"Cleaning up current page: {self.current_page}")
+                    page.cleanup()
+
+            # Clean up other pages
+            for name, page in self.pages.items():
+                if name != self.current_page and hasattr(page, 'cleanup'):
+                    self.logger.debug(f"Cleaning up page: {name}")
+                    page.cleanup()
+
+            # Clear references
+            self.pages.clear()
+            self.nav_buttons.clear()
+            self.current_page = None
+
+            # Disconnect any event handlers
+            self.event_bus.event_occurred.disconnect(self._handle_event)
+            self.cache.initialized.disconnect(self._on_cache_initialized)
+            self.cache.error_occurred.disconnect(self._on_cache_error)
+
+        except Exception as e:
+            self.logger.error(f"Error during cleanup: {e}", exc_info=True)
+            
     def update_cleanup_button(self):
         """Update the cleanup button text with current cache size"""
         try:
@@ -223,7 +330,7 @@ class MainWindow(QMainWindow):
             self.update_cleanup_button()
         except Exception as e:
             self.logger.error(f"Error cleaning cache: {e}")
-        
+            
     def _on_nav_click(self, page_id, event):
         """Handle navigation button clicks."""
         self.switch_page(page_id)
@@ -249,27 +356,18 @@ class MainWindow(QMainWindow):
             self.logger.error(f"Error switching to page {page_name}: {e}")
             
     def mousePressEvent(self, event):
+        """Handle mouse press for window dragging."""
         if event.button() == Qt.MouseButton.LeftButton:
             self.oldPos = event.globalPosition().toPoint()
 
     def mouseMoveEvent(self, event):
-        if self.oldPos is not None:
-            delta = event.globalPosition().toPoint() - self.oldPos
-            self.move(self.x() + delta.x(), self.y() + delta.y())
-            self.oldPos = event.globalPosition().toPoint()
+        """Handle window dragging."""
+        # Disable dragging in fullscreen
+        pass
 
     def mouseReleaseEvent(self, event):
+        """Handle end of window dragging."""
         self.oldPos = None
-        
-    def center_on_screen(self):
-        """Center window on primary screen"""
-        screen = QApplication.primaryScreen()
-        screen_geometry = screen.availableGeometry()
-        center_point = screen_geometry.center()
-        
-        window_geometry = self.frameGeometry()
-        window_geometry.moveCenter(center_point)
-        self.move(window_geometry.topLeft())
 
     def hideEvent(self, event):
         """Handle window hide events."""
@@ -281,31 +379,10 @@ class MainWindow(QMainWindow):
         self.logger.debug("Minimizing to system tray")
         event.ignore()
         self.hide()
-
-    def cleanup_application(self):
-        """Clean up resources when application is actually quitting."""
+          
+    async def _init_cache(self):
+        """Initialize caches asynchronously."""
         try:
-            # Clean up current page
-            if self.current_page and self.pages.get(self.current_page):
-                page = self.pages[self.current_page]
-                if hasattr(page, 'cleanup'):
-                    self.logger.debug(f"Cleaning up current page: {self.current_page}")
-                    page.cleanup()
-
-            # Clean up other pages
-            for name, page in self.pages.items():
-                if name != self.current_page and hasattr(page, 'cleanup'):
-                    self.logger.debug(f"Cleaning up page: {name}")
-                    page.cleanup()
-
-            # Clear references
-            self.pages.clear()
-            self.nav_buttons.clear()
-            self.current_page = None
-            
-            # Stop cleanup timer
-            if hasattr(self, 'cleanup_update_timer'):
-                self.cleanup_update_timer.stop()
-
+            await self.cache.initialize(self.playlists_dir)
         except Exception as e:
-            self.logger.error(f"Error during cleanup: {e}", exc_info=True)
+            self.logger.error(f"Cache initialization failed: {e}")

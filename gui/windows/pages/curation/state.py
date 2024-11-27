@@ -1,88 +1,181 @@
 # gui/windows/pages/curation/state.py
+
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Dict, Set
 from PyQt6.QtCore import QObject, pyqtSignal
 import logging
-from utils.m3u.parser import read_m3u
 
-@dataclass
-class CurrentSong:
-    """Currently playing song info."""
-    artist: str
-    title: str
+from core.matching.song_matcher import SongMatchResult
+from utils.m3u.parser import read_m3u, write_m3u
 
 class CurationState(QObject):
-    """State management for curation page."""
+    """Manages state and signals for curation page components."""
     
     # Song signals
-    song_changed = pyqtSignal(object)  # Emits CurrentSong
+    song_changed = pyqtSignal(object)  # Emits SongMatchResult
     song_cleared = pyqtSignal()
     
     # Playlist signals
     playlist_updated = pyqtSignal(Path, int)  # playlist_path, new_count
-    playlist_highlighted = pyqtSignal(Path, bool)  # playlist_path, highlighted
-    playlist_clicked = pyqtSignal(Path)  # playlist_path
+    playlist_selected = pyqtSignal(Path, bool)  # playlist_path, selected state
+    playlist_selection_changed = pyqtSignal(set)  # Emits full set of selected playlists
     
     # Stats signals
     stats_updated = pyqtSignal(int, int)  # total_tracks, unplaylisted
-    stats_progress = pyqtSignal(int)  # For stats calculation progress
     
     # Status signals
     status_changed = pyqtSignal(str)  # status message
     error_occurred = pyqtSignal(str)  # error message
     progress_updated = pyqtSignal(int)  # progress value
+    file_selection_changed = pyqtSignal(Path)  # Selected filepath changed
     
     def __init__(self):
         super().__init__()
-        self.current_song: Optional[CurrentSong] = None
+        self.current_song: Optional[SongMatchResult] = None
+        self.current_file: Optional[Path] = None
         self.playlist_counts: Dict[Path, int] = {}
-        self.highlighted_playlists: Set[Path] = set()
-        self.playlist_manager = None  # Will be set by page
-        self.playlists_dir = None  # Will be set by page
+        self.selected_playlists: Set[Path] = set()
+        self.playlist_manager = None
+        self.playlists_dir = None
         self.logger = logging.getLogger('curation_state')
         
-    def set_current_song(self, artist: str, title: str):
-        """Update current song."""
-        self.current_song = CurrentSong(artist, title)
-        self.song_changed.emit(self.current_song)
+        if not self.logger.handlers:
+            console_handler = logging.StreamHandler()
+            console_handler.setLevel(logging.DEBUG)
+            formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+            console_handler.setFormatter(formatter)
+            self.logger.addHandler(console_handler)
         
+    def set_current_song(self, song_info: SongMatchResult):
+        """Update current song with match information."""
+        self.logger.debug(f"Setting current song: {song_info.artist} - {song_info.title}")
+        self.current_song = song_info
+        
+        # Clear current selections before updating
+        self._do_clear_selections()
+        
+        # Set initial file selection to best match if available
+        if song_info.matches:
+            best_match = song_info.matches[0][0]  # Best match
+            self.set_current_file(best_match, from_song_change=True)
+            
+        self.song_changed.emit(song_info)
+
+    def _do_clear_selections(self):
+        """Internal method to clear selections with a single state update."""
+        if self.selected_playlists:  # Only emit if there were selections
+            old_selections = self.selected_playlists.copy()
+            self.selected_playlists.clear()
+            
+            # Emit deselection signals for each playlist
+            for playlist in old_selections:
+                self.playlist_selected.emit(playlist, False)
+            
+            # Emit overall selection change
+            self.playlist_selection_changed.emit(set())
+
+    def clear_playlist_selections(self):
+        """Public method to clear playlist selections."""
+        self._do_clear_selections()
+
+    def set_current_file(self, file_path: Path, from_song_change: bool = False):
+        if self.current_file != file_path:
+            self.current_file = file_path
+            
+            if not from_song_change:
+                self.file_selection_changed.emit(file_path)
+            
+            if self.playlist_manager:
+                self._do_clear_selections()  # Clear existing
+                
+                # Get playlists containing the file
+                playlists = self.playlist_manager.get_song_playlists(str(file_path))
+                
+                # Update selections all at once
+                new_selections = {Path(self.playlists_dir) / name for name in playlists}
+                
+                if new_selections:
+                    self.selected_playlists = new_selections
+                    
+                    # Emit individual selection signals
+                    for playlist in new_selections:
+                        self.playlist_selected.emit(playlist, True)
+                        
+                    # Emit overall selection change
+                    self.playlist_selection_changed.emit(new_selections)
+            
     def clear_current_song(self):
-        """Clear current song."""
+        """Clear current song and file selection."""
         self.current_song = None
+        self.current_file = None
+        self.clear_playlist_selections()
         self.song_cleared.emit()
         
+    def add_playlist_selection(self, playlist: Path, prevent_reset: bool = False) -> None:
+        """
+        Add a playlist to selected set.
+        
+        Args:
+            playlist: Playlist to select
+            prevent_reset: If True, don't emit signals (for batch updates)
+        """
+        if playlist not in self.selected_playlists:
+            self.selected_playlists.add(playlist)
+            if not prevent_reset:
+                self.playlist_selected.emit(playlist, True)
+                self.playlist_selection_changed.emit(self.selected_playlists)
+        
+    def remove_playlist_selection(self, playlist: Path, prevent_reset: bool = False) -> None:
+        """
+        Remove a playlist from selected set.
+        
+        Args:
+            playlist: Playlist to deselect
+            prevent_reset: If True, don't emit signals (for batch updates)
+        """
+        if playlist in self.selected_playlists:
+            self.selected_playlists.discard(playlist)
+            if not prevent_reset:
+                self.playlist_selected.emit(playlist, False)
+                self.playlist_selection_changed.emit(self.selected_playlists)
+
+    def toggle_playlist_selection(self, playlist_path: Path) -> bool:
+        """
+        Toggle playlist selection state. Returns new state.
+        Emits appropriate signals for UI updates.
+        """
+        self.logger.debug(f"Toggling playlist selection: {playlist_path}")
+        was_selected = playlist_path in self.selected_playlists
+        
+        if was_selected:
+            self.remove_playlist_selection(playlist_path)
+            return False
+        else:
+            self.add_playlist_selection(playlist_path)
+            return True
+           
     def update_stats(self, total: int, unplaylisted: int):
         """Update playlist statistics."""
         self.stats_updated.emit(total, unplaylisted)
         
     def update_playlist(self, playlist: Path, count: int):
         """Update playlist track count."""
+        self.logger.debug(f"Updating playlist {playlist.name} with count {count}")
         self.playlist_counts[playlist] = count
         self.playlist_updated.emit(playlist, count)
-        
-    def set_playlist_highlighted(self, playlist: Path, highlighted: bool):
-        """Update playlist highlight state."""
-        if highlighted:
-            self.highlighted_playlists.add(playlist)
-        else:
-            self.highlighted_playlists.discard(playlist)
-        self.playlist_highlighted.emit(playlist, highlighted)
-        
-    def emit_playlist_clicked(self, playlist: Path):
-        """Emit playlist click signal."""
-        self.playlist_clicked.emit(playlist)
-        
+           
     def set_status(self, message: str):
         """Update status message."""
         self.status_changed.emit(message)
         
     def report_error(self, error: str):
-        """Report error condition."""
+        """Report an error condition."""
+        self.logger.error(f"Error reported: {error}")
         self.error_occurred.emit(error)
         self.set_status(f"Error: {error}")
         
-    def update_progress(self, value: int):
+    def update_progress(self, value: int) -> None:
         """Update progress value."""
         self.progress_updated.emit(value)
         
@@ -92,6 +185,7 @@ class CurationState(QObject):
             return False
             
         try:
+            self.logger.debug("Starting unplaylisted collection")
             playlisted_tracks = set()
             loved_tracks = set()
             
@@ -99,13 +193,9 @@ class CurationState(QObject):
             for playlist in self.playlists_dir.glob("*.m3u"):
                 if (not playlist.name.startswith("Unplaylisted_") and 
                     playlist.name != "Love.bak.m3u"):
-                    self.logger.debug(f"Reading playlist: {playlist.name}")
                     paths = read_m3u(str(playlist))
-                    self.logger.debug(f"Found {len(paths)} tracks in {playlist.name}")
                     playlisted_tracks.update(paths)
             
-            self.logger.info(f"Total tracks in regular playlists: {len(playlisted_tracks)}")
-                    
             # Get loved tracks
             loved_playlist = self.playlists_dir / "Love.bak.m3u"
             if not loved_playlist.exists():
@@ -113,11 +203,9 @@ class CurationState(QObject):
                 return False
                 
             loved_tracks = set(read_m3u(str(loved_playlist)))
-            self.logger.info(f"Total loved tracks: {len(loved_tracks)}")
             
             # Calculate unplaylisted
             unplaylisted = sorted(loved_tracks - playlisted_tracks)
-            self.logger.info(f"Found {len(unplaylisted)} unplaylisted tracks")
             
             if not unplaylisted:
                 self.logger.info("No unplaylisted tracks found")
@@ -129,8 +217,6 @@ class CurationState(QObject):
             new_playlist = self.playlists_dir / f"Unplaylisted_{timestamp}.m3u"
             
             # Write tracks with UTF-8 encoding
-            import codecs
-            from utils.m3u.parser import write_m3u
             write_m3u(str(new_playlist), unplaylisted)
             
             # Verify the written file
@@ -146,7 +232,6 @@ class CurationState(QObject):
             # Try both common Dopamine install locations
             import subprocess
             dopamine_paths = [
-                #Path(r"C:\Program Files\Dopamine\Dopamine.exe"),
                 Path(r"C:\Program Files (x86)\Dopamine\Dopamine.exe")
             ]
             
@@ -163,3 +248,22 @@ class CurationState(QObject):
             self.logger.error(f"Failed to collect unplaylisted tracks: {e}", exc_info=True)
             self.report_error(f"Failed to collect unplaylisted: {str(e)}")
             return False
+            
+    def cache_current_state(self):
+        """Cache current song and file selection state."""
+        self.logger.debug("Caching current state")
+        self.logger.debug(f"Current song: {self.current_song.artist + ' - ' + self.current_song.title if self.current_song else None}")
+        self.logger.debug(f"Current file: {self.current_file}")
+        # State is already maintained in self.current_song and self.current_file
+        return bool(self.current_song and self.current_file)
+
+    def restore_cached_state(self):
+        """Restore cached song and file selection state."""
+        if self.current_song and self.current_file:
+            self.logger.debug("Restoring cached state")
+            self.logger.debug(f"Restoring song: {self.current_song.artist} - {self.current_song.title}")
+            self.logger.debug(f"Restoring file: {self.current_file}")
+            self.song_changed.emit(self.current_song)
+            self.file_selection_changed.emit(self.current_file)
+            return True
+        return False

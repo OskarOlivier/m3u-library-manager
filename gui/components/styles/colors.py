@@ -1,0 +1,26 @@
+# gui/components/styles/colors.py
+
+# Base colors
+BACKGROUND_COLOR = "#202020"
+SECONDARY_BACKGROUND = "#2D2D2D"
+
+# Text colors
+TEXT_COLOR = "#FFFFFF"
+SECONDARY_TEXT = "#999999"
+DISABLED_TEXT = "#666666"
+
+# Accent colors
+PRIMARY_ACCENT = "#0078D4"
+
+# Status colors
+SUCCESS_COLOR = "#1E824C"  # Soft green
+ERROR_COLOR = "#FF4444"   # Soft red
+WARNING_COLOR = "#FFA500" # Soft orange
+
+# List item colors
+ITEM_HOVER = "#404040"
+ITEM_SELECTED = PRIMARY_ACCENT
+
+# Progress bar colors
+PROGRESS_BACKGROUND = SECONDARY_BACKGROUND
+PROGRESS_FILL = PRIMARY_ACCENT

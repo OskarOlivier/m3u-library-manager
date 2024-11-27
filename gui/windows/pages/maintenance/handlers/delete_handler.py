@@ -2,71 +2,76 @@
 
 from pathlib import Path
 import logging
-from PyQt6.QtWidgets import QMessageBox, QApplication
+from typing import Optional
+from PyQt6.QtCore import QObject, pyqtSignal
+
 from core.playlist.safety import PlaylistSafety
 from app.config import Config
+from gui.dialogs.safety_dialogs import SafetyDialogs
 
-class DeleteHandler:
+class DeleteHandler(QObject):
     """Handles playlist deletion operations with safety checks."""
     
-    def __init__(self, state):
-        self.state = state
+    # Signals
+    operation_started = pyqtSignal(str)  # Operation description
+    operation_completed = pyqtSignal(bool)  # Success status
+    progress_updated = pyqtSignal(int)  # Progress value
+    status_updated = pyqtSignal(str)  # Status message
+    error_occurred = pyqtSignal(str)  # Error message
+    
+    def __init__(self):
+        super().__init__()
         self.logger = logging.getLogger('delete_handler')
         self.safety = PlaylistSafety(Path(Config.BACKUP_DIR))
         
-    def delete_playlist(self, playlist_path: Path):
-        """Delete a playlist with safety checks and backups."""
+    def delete_playlist(self, playlist_path: Path) -> None:
+        """
+        Delete a playlist with safety checks and backups.
+        
+        Args:
+            playlist_path: Path to playlist to delete
+        """
         try:
-            # Get the active window as parent for dialogs
-            active_window = QApplication.activeWindow()
-            
-            # Show confirmation dialog
-            response = QMessageBox.warning(
-                active_window,
-                "Confirm Playlist Deletion",
-                f"Are you sure you want to delete '{playlist_path.name}'?\n\n"
-                "This operation will create a backup, but the playlist will be removed.",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.No
-            )
-            
-            if response != QMessageBox.StandardButton.Yes:
+            # Get confirmation
+            if not SafetyDialogs.confirm_playlist_delete(playlist_path.name):
                 self.logger.info("Deletion cancelled by user")
                 return
-            
-            self.state.delete_started.emit(playlist_path)
-            self.state.set_status(f"Creating backup of {playlist_path.name}...")
+                
+            # Start operation
+            self.operation_started.emit("Delete Playlist")
+            self.status_updated.emit(f"Creating backup of {playlist_path.name}...")
+            self.progress_updated.emit(25)
             
             # Create backup
             backup_path = self.safety.create_backup(playlist_path)
             if not backup_path:
-                self.state.report_error("Failed to create backup")
+                self.error_occurred.emit("Failed to create backup")
+                self.operation_completed.emit(False)
                 return
                 
             # Show backup notification
-            QMessageBox.information(
-                active_window,
-                "Backup Created",
-                f"A backup has been created at:\n{backup_path}",
-                QMessageBox.StandardButton.Ok
-            )
+            SafetyDialogs.show_backup_created(backup_path)
+            self.progress_updated.emit(50)
             
             # Delete playlist
-            self.state.set_status(f"Deleting {playlist_path.name}...")
+            self.status_updated.emit(f"Deleting {playlist_path.name}...")
             playlist_path.unlink()
             
             if playlist_path.exists():
-                self.state.report_error("Failed to delete playlist")
+                self.error_occurred.emit("Failed to delete playlist")
+                self.operation_completed.emit(False)
                 return
                 
-            # Emit completion signal
-            self.state.delete_completed.emit()
-            self.state.set_status("Playlist deleted successfully")
+            # Success
+            self.progress_updated.emit(100)
+            self.status_updated.emit("Playlist deleted successfully")
+            self.operation_completed.emit(True)
             
         except Exception as e:
-            self.logger.error(f"Delete failed: {e}")
-            self.state.report_error(f"Delete failed: {str(e)}")
+            self.logger.error(f"Delete failed: {e}", exc_info=True)
+            self.error_occurred.emit(f"Delete failed: {str(e)}")
+            self.operation_completed.emit(False)
             
     def cleanup(self):
-        """Clean up resources."""
+        """Clean up any resources."""
         pass

@@ -1,43 +1,24 @@
 # run_playlist_manager.py
 
-from PyQt6.QtWidgets import QApplication
-import sys
 import os
-import logging
+import sys
 from pathlib import Path
+import logging
 import traceback
 from datetime import datetime
+from PyQt6.QtWidgets import QApplication
+from PyQt6.QtCore import Qt
+import asyncio
 
-def force_logging():
-    """Force immediate logging to both file and console."""
-    # Ensure directory exists
-    log_dir = Path.home() / ".m3u_library_manager" / "logs"
-    log_dir.mkdir(parents=True, exist_ok=True)
-    
-    # Create log file with timestamp
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    log_file = log_dir / f"app_{timestamp}.log"
-    
-    # Force immediate writing
-    handlers = [
-        logging.FileHandler(log_file, mode='w'),
-        logging.StreamHandler(sys.stdout)
-    ]
-    
-    # Configure root logger
-    logging.basicConfig(
-        level=logging.DEBUG,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-        handlers=handlers,
-        force=True
-    )
-    
-    # Write test message
-    logging.info(f"Logging initialized to {log_file}")
-    logging.info(f"Python version: {sys.version}")
-    logging.info(f"PyQt version: {QApplication.applicationVersion()}")
-    
-    return log_file
+from utils.logging.config import setup_logging
+from core.cache.relationship_cache import RelationshipCache
+from core.events.event_bus import EventBus
+from app.config import Config
+
+if os.name == 'nt':  # Only on Windows
+    import ctypes
+    # Tell Windows not to scale the application
+    ctypes.windll.shcore.SetProcessDpiAwareness(1)
 
 def qt_message_handler(mode, context, message):
     """Handle Qt debug messages"""
@@ -62,9 +43,25 @@ def install_exception_hooks():
     
     sys.excepthook = exception_hook
 
+async def initialize_core_systems():
+    """Initialize core systems asynchronously."""
+    try:
+        # Get cache instance
+        cache = RelationshipCache.get_instance()
+        logging.info("Initializing relationship cache...")
+        
+        # Initialize cache with playlists directory
+        await cache.initialize(Path(Config.PLAYLISTS_DIR))
+        logging.info("Relationship cache initialized successfully")
+        
+    except Exception as e:
+        logging.error(f"Failed to initialize core systems: {e}", exc_info=True)
+        raise
+
 def main():
     # Initialize logging first
-    log_file = force_logging()
+    log_dir = Path.home() / ".m3u_library_manager" / "logs"
+    log_file = setup_logging(log_dir, debug=True)
     logging.info("Starting application")
     
     try:
@@ -72,10 +69,15 @@ def main():
         app = QApplication(sys.argv)
         app.setStyle("Fusion")
         
-        # Install exception hooks
+        # Install exception hooks and Qt message handler
         install_exception_hooks()
+        qInstallMessageHandler(qt_message_handler)
         
-        # Import window only after logging is set up
+        # Initialize core systems
+        logging.info("Initializing core systems...")
+        asyncio.run(initialize_core_systems())
+        
+        # Import window only after logging and core systems are set up
         from gui.windows.main_window import MainWindow
         
         # Create window with try-except
@@ -93,7 +95,7 @@ def main():
                 logging.info("Application exiting")
                 if window:
                     logging.debug("Cleaning up window")
-                    window.deleteLater()
+                    window.cleanup_application()
             except Exception as e:
                 logging.error(f"Error during cleanup: {e}", exc_info=True)
                 
@@ -112,6 +114,46 @@ def main():
         raise
     finally:
         logging.info(f"Log file location: {log_file}")
+        
+def setup_logging(log_dir: Path, debug: bool = True):
+    """Configure logging for all components"""
+    # Ensure log directory exists
+    log_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Create formatters
+    console_formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    file_formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    
+    # Setup console handler
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(logging.DEBUG if debug else logging.INFO)
+    console_handler.setFormatter(console_formatter)
+    
+    # Setup file handler
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    file_handler = logging.FileHandler(log_dir / f"app_{timestamp}.log", encoding='utf-8')
+    file_handler.setLevel(logging.DEBUG)
+    file_handler.setFormatter(file_formatter)
+    
+    # Configure root logger
+    root_logger = logging.getLogger()
+    root_logger.setLevel(logging.DEBUG if debug else logging.INFO)
+    root_logger.addHandler(console_handler)
+    root_logger.addHandler(file_handler)
+    
+    # Configure specific loggers
+    loggers_to_configure = [
+        'song_matcher',
+        'string_utils',
+        'window_handler',
+        'playlist_manager',
+        'relationship_cache'  # Added relationship cache logger
+    ]
+    
+    for logger_name in loggers_to_configure:
+        logger = logging.getLogger(logger_name)
+        logger.setLevel(logging.DEBUG if debug else logging.INFO)
+        # Don't add handlers - they'll inherit from root logger
 
 if __name__ == "__main__":
     sys.exit(main())

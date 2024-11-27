@@ -2,10 +2,16 @@
 
 from PyQt6.QtWidgets import QLabel, QVBoxLayout
 from PyQt6.QtCore import Qt
+import logging
+import traceback
 
-from ..base import BasePage
+from ..base_page import BasePage
 
 class ExplorePage(BasePage):
+    def __init__(self, parent=None):
+        self.logger = logging.getLogger('explore_page')
+        super().__init__(parent)
+
     def setup_ui(self):
         """Set up the explore page UI."""
         layout = QVBoxLayout(self)
@@ -37,4 +43,13 @@ class ExplorePage(BasePage):
 
     def cleanup(self):
         """Clean up resources when page is closed."""
-        pass
+        try:
+            self.logger.debug("Starting explore page cleanup")
+            # Add any specific cleanup here when needed
+            BasePage.cleanup(self)
+            self.logger.debug("Explore page cleanup completed")
+        except Exception as e:
+            self.logger.error(f"Error during explore page cleanup: {str(e)}")
+            self.logger.error(f"Traceback: {traceback.format_exc()}")
+        finally:
+            self.logger.debug("Explore page cleanup finished")

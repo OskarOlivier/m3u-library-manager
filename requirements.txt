@@ -5,7 +5,13 @@ pathlib>=1.0.1     # Path manipulation utilities
 
 # GUI and Interface
 PyQt6>=6.4.0       # Main GUI framework
+PyQt6-WebEngine>=6.4.0  # For web view
 keyboard>=0.13.5   # Global hotkey support
+
+# Network visualization
+pyvis>=0.3.1       # Network visualization
+networkx>=2.8.4    # Graph operations
+community>=1.0.0b1  # Community detection
 
 # Windows-specific
 pywin32>=306       # Windows API access for window title detection

@@ -11,6 +11,7 @@ import win32api
 import sys
 
 from gui.windows.main_window import MainWindow
+from core.events.event_bus import EventBus  # Add this import too here
 
 class WindowsHotkey:
     """Windows hotkey handler using polling approach."""

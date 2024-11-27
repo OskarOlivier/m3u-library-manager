@@ -1,20 +1,23 @@
 # gui/windows/pages/sync/handlers/sync_handler.py
 
 from pathlib import Path
-from typing import Set
 import logging
+import asyncio
+from typing import Set, Dict, Optional
 
 from .async_base import AsyncOperation
 from .connection_handler import ConnectionHandler
-from ..state import SyncPageState
-from ..components.safety_dialogs import SafetyDialogs
+from ..state import PlaylistAnalysis
 from core.playlist.safety import PlaylistSafety
 from app.config import Config
 
 class SyncHandler(AsyncOperation):
-    """Handles sync operations with safety checks."""
+    """
+    Handles sync operations with safety checks.
+    Only modifies playlist (m3u) files, never touches the actual media files.
+    """
     
-    def __init__(self, state: SyncPageState, connection: ConnectionHandler):
+    def __init__(self, state, connection: ConnectionHandler):
         super().__init__()
         self.state = state
         self.connection = connection
@@ -22,109 +25,149 @@ class SyncHandler(AsyncOperation):
         self.logger = logging.getLogger('sync_handler')
         
     def sync_files(self, operation: str, files: Set[Path]):
-        """Start a sync operation with safety checks."""
+        """Start a sync operation."""
         if not files:
+            self.logger.warning("No files selected for sync operation")
+            self.state.report_error("No files selected")
             return
-            
+
+        self.logger.info(f"Starting sync operation: {operation} with {len(files)} files")
+        self.logger.debug(f"Current playlist: {self.state.current_playlist}")
+
         async def _sync():
-            # Check connection
+            # Verify connection first
+            self.logger.debug("Verifying SSH connection")
             success, error = self.connection.get_connection()
             if not success:
+                self.logger.error(f"Connection failed: {error}")
                 self.state.report_error(error)
                 return
                 
             try:
-                # Get confirmation based on operation type
-                if not self._confirm_operation(operation, files):
-                    return
-                    
-                # Create backup for affected playlist
-                if self.state.current_playlist:
-                    self.logger.info("Creating backup...")
+                # Create backup if operating on local playlist
+                if self.state.current_playlist and (operation in ['add_local', 'delete_local']):
+                    self.logger.debug("Creating backup before local operation")
                     backup_path = self.safety.create_backup(self.state.current_playlist)
-                    if backup_path:
-                        self.logger.info(f"Backup created at {backup_path}")
-                        SafetyDialogs.show_backup_created(backup_path)
-                    else:
-                        error_msg = "Failed to create backup"
-                        self.logger.error(error_msg)
-                        self.state.report_error(error_msg)
-                        return
+                    if not backup_path:
+                        self.logger.error("Failed to create backup")
+                        raise RuntimeError("Failed to create backup")
                 
-                self.state.is_syncing = True
-                self.state.sync_started.emit(operation)
-                self.state.set_status(f"Starting {operation} operation...")
+                self.state.start_sync(operation)
                 
-                # Perform the sync operation
-                await self._execute_sync_operation(operation, files)
+                # Log sync parameters
+                sync_params = {
+                    'add_to_remote': files if operation == 'add_remote' else set(),
+                    'add_to_local': files if operation == 'add_local' else set(),
+                    'remove_from_remote': files if operation == 'delete_remote' else set(),
+                    'remove_from_local': files if operation == 'delete_local' else set()
+                }
                 
-                # Trigger reanalysis of the playlist
-                if self.state.current_playlist:
-                    self.state.set_status("Updating analysis...")
-                    analysis = await self._analyze_after_sync(self.state.current_playlist)
-                    if analysis:
-                        self.state.set_analysis(self.state.current_playlist, analysis)
+                self.logger.debug(f"Sync parameters prepared:")
+                for param, value in sync_params.items():
+                    self.logger.debug(f"  {param}: {len(value)} files")
                 
-                self.state.sync_completed.emit()
-                self.state.set_status(f"{operation} completed successfully")
-                
+                if not self.state.current_playlist:
+                    self.logger.error("No playlist selected for sync operation")
+                    raise RuntimeError("No playlist selected")
+
+                # Perform sync operation (only modifies m3u files)
+                self.logger.info(f"Executing sync operation on playlist: {self.state.current_playlist}")
+                success = await self.connection.sync_ops.sync_playlist(
+                    playlist_path=self.state.current_playlist,
+                    progress_callback=self.state.update_progress,
+                    **sync_params
+                )
+
+                if not success:
+                    self.logger.error("Sync operation failed")
+                    self.state.report_error(f"Sync operation failed")
+                    return
+
+                # Reanalyze playlist after successful sync
+                self.logger.debug("Starting post-sync analysis")
+                analysis = await self._analyze_after_sync(self.state.current_playlist)
+                if analysis:
+                    self.logger.debug("Updating analysis results")
+                    self.state.set_analysis(self.state.current_playlist, analysis)
+
+                self.logger.info("Sync completed successfully")
+                self.state.set_status("Sync completed successfully")
+                    
             except Exception as e:
                 self.logger.error(f"Sync failed: {e}", exc_info=True)
                 self.state.report_error(f"Sync failed: {str(e)}")
                 
             finally:
-                self.state.is_syncing = False
+                self.state.finish_sync()
                 
-    def _confirm_operation(self, operation: str, files: Set[Path]) -> bool:
-        """Get user confirmation for operation."""
-        if operation.startswith('delete'):
-            location = 'local' if operation == 'delete_local' else 'remote'
-            return SafetyDialogs.confirm_delete_files(location, len(files))
-        else:
-            operation_name = operation.replace('_', ' ').title()
-            return SafetyDialogs.confirm_sync_operation(operation_name, len(files))
+        self._start_operation(_sync())
             
-    async def _execute_sync_operation(self, operation: str, files: Set[Path]):
-        """Execute the actual sync operation."""
-        if not self.connection.sync_ops:
-            raise RuntimeError("Sync operations handler not initialized")
-            
-        total_files = len(files)
-        processed_files = 0
+    def upload_playlist(self, playlist_path: Path):
+        """Upload a playlist file that doesn't exist on remote."""
         
-        for file in files:
-            if not self.current_worker or not self.current_worker._is_running:
-                self.logger.debug("Operation cancelled")
-                break
-                
+        async def _upload():
+            self.logger.debug(f"Starting playlist upload: {playlist_path.name}")
+            
             try:
-                # Update progress for each file
-                progress = int((processed_files / total_files) * 100)
-                self.state.update_progress(progress)
-                self.state.set_status(f"Processing: {file.name}")
+                from utils.m3u.parser import read_m3u, write_m3u, _normalize_path
                 
-                # Perform operation
-                if operation == 'add_remote':
-                    await self.connection.sync_ops.add_to_remote({file})
-                elif operation == 'add_local':
-                    await self.connection.sync_ops.add_to_local({file})
-                elif operation == 'delete_remote':
-                    await self.connection.sync_ops.remove_from_remote({file})
-                elif operation == 'delete_local':
-                    await self.connection.sync_ops.remove_from_local({file})
+                # Read and normalize paths
+                paths = read_m3u(str(playlist_path))
+                if not paths:
+                    self.logger.error("Failed to read playlist content")
+                    raise RuntimeError("Empty or invalid playlist")
                     
-                processed_files += 1
+                # Normalize paths for remote
+                normalized_paths = []
+                for path in paths:
+                    normalized = _normalize_path(path)
+                    if not normalized:
+                        continue
+                    normalized_paths.append(normalized)
+                    
+                if not normalized_paths:
+                    raise RuntimeError("No valid paths found in playlist")
+                    
+                # Calculate remote path
+                remote_path = f"{self.connection.ssh_handler.credentials.remote_path}/{playlist_path.name}"
+                
+                # Create temporary file with normalized paths
+                import tempfile
+                temp_path = Path(tempfile.gettempdir()) / f"upload_{playlist_path.name}"
+                
+                try:
+                    # Write normalized paths to temp file
+                    write_m3u(str(temp_path), normalized_paths, use_absolute_paths=False)
+                    
+                    # Upload to remote
+                    if not self.connection.ssh_handler.copy_to_remote(temp_path, remote_path):
+                        raise RuntimeError("Failed to upload playlist to remote")
+                        
+                finally:
+                    # Clean up temp file
+                    if temp_path.exists():
+                        temp_path.unlink()
+                        
+                # Reanalyze after upload
+                analysis = await self._analyze_after_sync(playlist_path)
+                if analysis:
+                    self.state.set_analysis(playlist_path, analysis)
+                    
+                return True
                 
             except Exception as e:
-                self.logger.error(f"Error processing {file}: {e}")
-                self.state.report_error(f"Error processing {file.name}")
-                
-        # Final progress update
-        self.state.update_progress(100)
-            
+                self.logger.error(f"Upload failed: {e}", exc_info=True)
+                raise RuntimeError(f"Upload failed: {str(e)}")
+                    
+            finally:
+                self.state.finish_sync()
+                    
+        self._start_operation(_upload())
+        
     async def _analyze_after_sync(self, playlist_path: Path):
         """Reanalyze playlist after sync operation."""
         try:
+            self.logger.debug(f"Starting post-sync analysis for {playlist_path}")
             result = await self.connection.file_comparator.compare_locations(
                 playlist_path,
                 self.connection.local_base,
@@ -132,6 +175,7 @@ class SyncHandler(AsyncOperation):
                 None  # Skip progress updates for quick reanalysis
             )
             
+            from ..state import PlaylistAnalysis
             return PlaylistAnalysis(
                 missing_remotely=result.missing_remotely,
                 missing_locally=result.missing_locally,
@@ -141,70 +185,15 @@ class SyncHandler(AsyncOperation):
         except Exception as e:
             self.logger.error(f"Reanalysis failed: {e}")
             return None
+
+    def stop(self):
+        """Stop current operation."""
+        self.logger.debug("Stopping sync operation")
+        if self.current_worker:
+            self.current_worker.stop()
             
-    def upload_playlist(self, playlist_path: Path):
-        """Upload a playlist that doesn't exist on remote."""
-        async def _upload():
-            # Check connection
-            self.logger.debug("Starting playlist upload operation")
-            success, error = self.connection.get_connection()
-            if not success:
-                self.logger.error(f"Connection failed: {error}")
-                self.state.report_error(error)
-                return
-                
-            try:
-                # Confirm operation
-                if not SafetyDialogs.confirm_sync_operation("Upload Playlist", 1):
-                    self.logger.debug("Upload cancelled by user")
-                    return
-                    
-                self.state.is_syncing = True
-                self.state.sync_started.emit("upload_playlist")
-                self.state.set_status(f"Uploading playlist: {playlist_path.name}")
-                
-                # Calculate remote path
-                remote_path = f"{Config.SSH_REMOTE_PATH}/{playlist_path.name}"
-                self.logger.debug(f"Remote path: {remote_path}")
-                
-                # Verify local playlist
-                if not playlist_path.exists():
-                    self.logger.error("Local playlist file not found")
-                    self.state.report_error("Local playlist file not found")
-                    return
-                    
-                self.logger.debug("Starting file transfer...")
-                # Perform the upload
-                if not self.connection.ssh_handler.copy_to_remote(playlist_path, remote_path):
-                    self.logger.error("Upload failed in ssh_handler.copy_to_remote")
-                    self.state.report_error("Failed to upload playlist")
-                    return
-                    
-                self.logger.debug("File transfer completed, starting reanalysis")
-                
-                # Reanalyze after upload
-                self.state.set_status("Updating analysis...")
-                analysis = await self._analyze_after_sync(playlist_path)
-                if analysis:
-                    self.state.set_analysis(playlist_path, analysis)
-                    
-                self.state.sync_completed.emit()
-                self.state.set_status("Upload completed successfully")
-                self.logger.debug("Upload operation completed successfully")
-                    
-            except Exception as e:
-                self.logger.error(f"Upload failed: {e}", exc_info=True)
-                self.state.report_error(f"Upload failed: {str(e)}")
-                    
-            finally:
-                self.state.is_syncing = False
-                self.logger.debug("Upload operation finished")
-                    
-        self._start_operation(
-            _upload(),
-            progress_callback=self.state.update_progress
-        )
-        
     def cleanup(self):
         """Clean up resources."""
+        self.logger.debug("Cleaning up sync handler")
+        self.stop()
         super().cleanup()

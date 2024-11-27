@@ -1,6 +1,6 @@
 # gui/components/__init__.py
 """Shared components package."""
 
-from .status_panel import StatusPanel
+from .panels.base_status_panel import StatusPanel
 
 __all__ = ['StatusPanel']
