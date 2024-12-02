@@ -8,29 +8,19 @@ from typing import Optional, List
 from app.config import Config
 from data.cache.analysis_cache import AnalysisCache
 from utils.logging.sync_logger import SyncLogger
-from ..state import SyncPageState, PlaylistAnalysis
-from .async_base import AsyncOperation
-from .connection_handler import ConnectionHandler
+from gui.workers.async_base import AsyncOperation
+from core.context import SyncService
+from ..state import PlaylistAnalysis
 
 class AnalysisHandler(AsyncOperation):
     """Handles playlist analysis operations."""
     
-    def __init__(self, state: SyncPageState, connection: ConnectionHandler):
+    def __init__(self, state, connection_handler, sync_service: SyncService):
         super().__init__()
         self.state = state
-        self.connection = connection
-        
-        # Set up logging
-        self.logger = logging.getLogger('AnalysisHandler')
-        self.logger.setLevel(logging.DEBUG)
-        
-        # Add console handler if not already present
-        if not self.logger.handlers:
-            console_handler = logging.StreamHandler()
-            console_handler.setLevel(logging.DEBUG)
-            formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-            console_handler.setFormatter(formatter)
-            self.logger.addHandler(console_handler)
+        self.connection = connection_handler
+        self.sync_service = sync_service
+        self.logger = logging.getLogger('analysis_handler')
         
         # Initialize support components
         self.cache = AnalysisCache(Path.home() / ".m3u_library_manager" / "cache")
@@ -77,7 +67,7 @@ class AnalysisHandler(AsyncOperation):
             analysis = PlaylistAnalysis(
                 missing_remotely=result.missing_remotely,
                 missing_locally=result.missing_locally,
-                exists_remotely=result.exists_remotely  # Use the result's exists_remotely value
+                exists_remotely=result.exists_remotely
             )
             
             self.logger.debug("Caching results")
@@ -107,7 +97,7 @@ class AnalysisHandler(AsyncOperation):
         except Exception as e:
             self.logger.error(f"Error analyzing {playlist_path.name}: {e}", exc_info=True)
             raise
-            
+
     def analyze_playlist(self, playlist_path: Path):
         """Start analysis of a single playlist."""
         self.logger.info(f"Starting single playlist analysis: {playlist_path.name}")
@@ -205,3 +195,7 @@ class AnalysisHandler(AsyncOperation):
             _analyze_all(),
             progress_callback=self.state.update_progress
         )
+
+    def cleanup(self):
+        """Clean up resources."""
+        super().cleanup()

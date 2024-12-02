@@ -1,5 +1,4 @@
 # gui/windows/pages/curation/handlers/playlist_handler.py
-
 from PyQt6.QtCore import QObject
 from pathlib import Path
 import logging
@@ -12,19 +11,8 @@ class PlaylistHandler(QObject):
     def __init__(self, state):
         super().__init__()
         self.state = state
-        
-        # Initialize logger properly
         self.logger = logging.getLogger('playlist_handler')
-        self.logger.setLevel(logging.INFO)
         
-        # Add console handler if not present
-        if not self.logger.handlers:
-            console_handler = logging.StreamHandler()
-            console_handler.setLevel(logging.DEBUG)
-            formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-            console_handler.setFormatter(formatter)
-            self.logger.addHandler(console_handler)
-            
     def toggle_song_in_playlist(self, playlist_path: Path):
         """Toggle current song in/out of playlist with consistent selection state."""
         try:

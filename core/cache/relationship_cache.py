@@ -33,137 +33,150 @@ class RelationshipMetrics:
         return self.intersection_size > 0
 
 
-
 class RelationshipCache(CacheBase):
     """Manages cached relationship data between playlists."""
     
     _instance = None
     
     def __init__(self):
-        if RelationshipCache._instance is not None:
-            raise RuntimeError("RelationshipCache is a singleton")
         super().__init__()
-        
-        # Core state
+        self.name = "relationship_cache"
         self._cache: Dict[str, Dict[str, RelationshipMetrics]] = {}
-        self._track_to_playlists: Dict[str, Set[str]] = {}
+        self._track_to_playlists: Dict[str, Set[str]] = defaultdict(set)
         self._playlist_tracks: Dict[str, Set[str]] = {}
-        
-        # Get event bus instance
+        self.logger = logging.getLogger('relationship_cache')
         self.event_bus = EventBus.get_instance()
-        
+        self._initialization_lock = asyncio.Lock()
+        self._initialization_started = False
+
     @classmethod
     def get_instance(cls) -> 'RelationshipCache':
+        """Get or create the singleton instance."""
         if cls._instance is None:
             cls._instance = RelationshipCache()
         return cls._instance
-        
+
     async def initialize(self, playlists_dir: Path, 
                         progress_callback: Optional[callable] = None) -> None:
         """Initialize cache with all playlists asynchronously."""
-        if self._initialized:
-            self.logger.warning("Cache already initialized")
-            return
-            
-        try:
-            self.logger.info("Starting cache initialization")
-            self._clear_cache()
-            
-            # Get regular playlists (excluding backups and unplaylisted)
-            from utils.playlist import get_regular_playlists
-            playlist_paths = get_regular_playlists(playlists_dir)
-            total_playlists = len(playlist_paths)
-            
-            if not playlist_paths:
-                self.logger.warning("No playlists found for initialization")
+        async with self._initialization_lock:
+            if self._initialized:
+                self.logger.warning("Cache already initialized")
                 return
                 
-            # First pass: Load all playlist tracks
-            for i, playlist_path in enumerate(playlist_paths):
-                if progress_callback:
-                    progress = int((i / total_playlists) * 50)  # First 50%
-                    progress_callback(progress)
-                    
-                try:
-                    tracks = read_m3u(str(playlist_path))
-                    if tracks is None:
+            if self._initialization_started:
+                self.logger.debug("Initialization already in progress")
+                return
+                
+            self._initialization_started = True
+            
+            try:
+                self.logger.info("Starting cache initialization")
+                self._clear_cache()
+                
+                # Get regular playlists (excluding backups and unplaylisted)
+                from utils.playlist import get_regular_playlists
+                playlist_paths = get_regular_playlists(playlists_dir)
+                total_playlists = len(playlist_paths)
+                
+                if not playlist_paths:
+                    self.logger.warning("No playlists found for initialization")
+                    return
+
+                # First pass: Load all playlist tracks
+                for i, playlist_path in enumerate(playlist_paths):
+                    if progress_callback:
+                        progress = int((i / total_playlists) * 50)  # First 50%
+                        progress_callback(progress)
+                        
+                    try:
+                        tracks = read_m3u(str(playlist_path))
+                        if tracks is None:
+                            continue
+                            
+                        normalized_tracks = {_normalize_path(t) for t in tracks}
+                        playlist_id = str(playlist_path)
+                        
+                        # Store playlist tracks
+                        self._playlist_tracks[playlist_id] = normalized_tracks
+                        
+                        # Update track to playlist mapping
+                        for track in normalized_tracks:
+                            self._track_to_playlists[track].add(playlist_id)
+                            
+                        self.logger.debug(f"Loaded {len(normalized_tracks)} tracks for {playlist_path.name}")
+                            
+                    except Exception as e:
+                        self.logger.error(f"Error loading playlist {playlist_path}: {e}")
                         continue
                         
-                    normalized_tracks = {_normalize_path(t) for t in tracks}
-                    playlist_id = str(playlist_path)
+                    await asyncio.sleep(0)
                     
-                    # Store playlist tracks
-                    self._playlist_tracks[playlist_id] = normalized_tracks
-                    
-                    # Update track to playlist mapping
-                    for track in normalized_tracks:
-                        self._track_to_playlists[track].add(playlist_id)
+                # Second pass: Calculate relationships
+                self.logger.info("Calculating playlist relationships")
+                for i, source_id in enumerate(self._playlist_tracks):
+                    if progress_callback:
+                        progress = 50 + int((i / total_playlists) * 50)  # Second 50%
+                        progress_callback(progress)
                         
-                    self.logger.debug(f"Loaded {len(normalized_tracks)} tracks for {playlist_path.name}")
-                        
-                except Exception as e:
-                    self.logger.error(f"Error loading playlist {playlist_path}: {e}")
-                    continue
+                    source_tracks = self._playlist_tracks[source_id]
+                    source_size = len(source_tracks)
                     
-                # Allow other operations
-                await asyncio.sleep(0)
-                
-            # Second pass: Calculate relationships
-            self.logger.info("Calculating playlist relationships")
-            for i, source_id in enumerate(self._playlist_tracks):
+                    self._cache[source_id] = {}
+                    
+                    MIN_INTERSECTION_THRESHOLD = 3  # Example: At least 3 shared tracks
+                    
+                    # Calculate relationships with other playlists
+                    for target_id, target_tracks in self._playlist_tracks.items():
+                        if source_id != target_id:
+                            intersection = source_tracks & target_tracks
+                            intersection_size = len(intersection)
+                            target_size = len(target_tracks)
+                            
+                            # Only store if there's a relationship
+                            if intersection_size > MIN_INTERSECTION_THRESHOLD:
+                                metrics = RelationshipMetrics(
+                                    intersection_size=intersection_size,
+                                    source_size=source_size,
+                                    target_size=target_size
+                                )
+                                
+                                self._cache[source_id][target_id] = metrics
+                                
+                                self.logger.debug(
+                                    f"Found relationship: {Path(source_id).name} -> {Path(target_id).name} "
+                                    f"({intersection_size} shared tracks, score: {metrics.normalized_score:.2f})"
+                                )
+                            
+                    await asyncio.sleep(0)
+                    
                 if progress_callback:
-                    progress = 50 + int((i / total_playlists) * 50)  # Second 50%
-                    progress_callback(progress)
+                    progress_callback(100)
                     
-                source_tracks = self._playlist_tracks[source_id]
-                source_size = len(source_tracks)
+                self._initialized = True
+                self._initialization_started = False
                 
-                self._cache[source_id] = {}
+                self.logger.info(f"Cache initialization complete. Found {len(self._track_to_playlists)} unique tracks "
+                               f"across {len(self._playlist_tracks)} playlists")
                 
-                MIN_INTERSECTION_THRESHOLD = 3  # Example: At least 3 shared tracks
+                self._set_initialized()  # Use base class method
                 
-                # Calculate relationships with other playlists
-                for target_id, target_tracks in self._playlist_tracks.items():
-                    if source_id != target_id:
-                        intersection = source_tracks & target_tracks
-                        intersection_size = len(intersection)
-                        target_size = len(target_tracks)
-                        
-                        # Only store if there's a relationship
-                        if intersection_size > MIN_INTERSECTION_THRESHOLD:
-                            metrics = RelationshipMetrics(
-                                intersection_size=intersection_size,
-                                source_size=source_size,
-                                target_size=target_size
-                            )
-                            
-                            self._cache[source_id][target_id] = metrics
-                            
-                            self.logger.debug(
-                                f"Found relationship: {Path(source_id).name} -> {Path(target_id).name} "
-                                f"({intersection_size} shared tracks, score: {metrics.normalized_score:.2f})"
-                            )
-                        
-                # Allow other operations
-                await asyncio.sleep(0)
+                # Emit cache ready event
+                self.event_bus.emit_event(EventType.CACHE_READY, {
+                    'cache_type': 'relationship',
+                    'playlist_count': len(self._playlist_tracks),
+                    'track_count': len(self._track_to_playlists)
+                })
                 
-            if progress_callback:
-                progress_callback(100)
-                
-            self._initialized = True
-            self.logger.info(f"Cache initialization complete. Found {len(self._track_to_playlists)} unique tracks "
-                           f"across {len(self._playlist_tracks)} playlists")
-            
-            self._set_initialized()  # Use base class method
-            
-            # Emit cache ready event
-            self.event_bus.emit_event(EventType.CACHE_READY, {
-                'cache_type': 'relationship'
-            })
-            
-        except Exception as e:
-            self._report_error(f"Cache initialization failed: {e}")
-            raise
+            except Exception as e:
+                self._initialization_started = False
+                self._initialized = False
+                self._report_error(f"Cache initialization failed: {e}")
+                raise
+
+    def is_initialization_started(self) -> bool:
+        """Check if initialization has started."""
+        return self._initialization_started
             
     def _clear_cache(self):
         """Clear all cached data."""
@@ -280,7 +293,7 @@ class RelationshipCache(CacheBase):
             
     def remove_playlist(self, playlist_id: str) -> None:
         """Remove a playlist from the cache."""
-        if not self._initialized:
+        if not self._initialized():
             return
             
         try:

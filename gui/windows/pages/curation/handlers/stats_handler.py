@@ -2,7 +2,6 @@
 from PyQt6.QtCore import QObject, QTimer
 from pathlib import Path
 import logging
-from typing import Optional
 
 from utils.playlist.stats import calculate_playlist_stats
 
@@ -64,6 +63,5 @@ class StatsHandler(QObject):
             if self.is_running:
                 self.logger.debug("Stopping stats calculation")
                 self.stop_analysis()
-            # Clear any timers or handlers if added in future
         except Exception as e:
             self.logger.error(f"Error during stats handler cleanup: {e}")

@@ -1,13 +1,8 @@
 # gui/windows/pages/maintenance/handlers/delete_handler.py
 
+from PyQt6.QtCore import QObject, pyqtSignal
 from pathlib import Path
 import logging
-from typing import Optional
-from PyQt6.QtCore import QObject, pyqtSignal
-
-from core.playlist.safety import PlaylistSafety
-from app.config import Config
-from gui.dialogs.safety_dialogs import SafetyDialogs
 
 class DeleteHandler(QObject):
     """Handles playlist deletion operations with safety checks."""
@@ -22,11 +17,10 @@ class DeleteHandler(QObject):
     def __init__(self):
         super().__init__()
         self.logger = logging.getLogger('delete_handler')
-        self.safety = PlaylistSafety(Path(Config.BACKUP_DIR))
         
     def delete_playlist(self, playlist_path: Path) -> None:
         """
-        Delete a playlist with safety checks and backups.
+        Delete a playlist with safety checks.
         
         Args:
             playlist_path: Path to playlist to delete

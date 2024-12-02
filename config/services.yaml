@@ -1,0 +1,62 @@
+# config/services.yaml
+
+services:
+  window_service:
+    enabled: true
+    settings:
+      poll_interval: 1000  # Window title check interval in ms
+    dependencies: []
+
+  playlist_service:
+    enabled: true
+    settings:
+      backup_count: 5  # Number of backups to keep per playlist
+      auto_backup: true
+    dependencies: []
+
+  sync_service:
+    enabled: true
+    settings:
+      connection_timeout: 30  # SSH connection timeout in seconds
+      retry_attempts: 3      # Number of connection retry attempts
+      verify_transfers: true # Verify file transfers after completion
+    dependencies: ["playlist_service"]
+
+  ui_service:
+    enabled: true
+    settings:
+      auto_hide_progress: true  # Auto-hide progress bars on completion
+      confirm_dangerous: true   # Always confirm dangerous operations
+    dependencies: []
+
+  analysis_service:
+    enabled: true
+    settings:
+      cache_duration: 3600  # Analysis cache duration in seconds
+      min_similarity: 0.9   # Minimum similarity threshold for matches
+      parallel_analysis: true
+    dependencies: ["sync_service"]
+
+  event_service:
+    enabled: true
+    settings:
+      max_history: 1000    # Maximum number of events to keep in history
+      async_dispatch: true # Use async event dispatch
+    dependencies: []
+
+  state_service:
+    enabled: true
+    settings:
+      auto_save: true          # Automatically save states on change
+      save_interval: 300       # State save interval in seconds
+      cache_states: true       # Cache state data in memory
+      max_cached_states: 10    # Maximum number of cached states
+    dependencies: ["event_service"]
+
+  relationship_cache:
+    enabled: true
+    settings:
+      cache_duration: 3600     # Cache duration in seconds
+      min_relationship: 0.1    # Minimum relationship strength to cache
+      max_cached_items: 1000   # Maximum number of cached relationships
+    dependencies: []

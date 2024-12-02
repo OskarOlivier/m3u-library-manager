@@ -3,10 +3,11 @@
 from pathlib import Path
 import logging
 import asyncio
-from typing import Dict, Set, List, Tuple, Optional
+from typing import Dict, Set, Optional, Tuple, Callable
+from PyQt6.QtCore import QObject, pyqtSignal
 
-from utils.m3u.parser import read_m3u, write_m3u
-from gui.workers.async_base import AsyncOperation  # Updated import path
+from core.common.string_utils import clean_for_matching
+from gui.workers.async_base import AsyncOperation
 
 class FileLocatorHandler(AsyncOperation):
     """Handles file location and analysis operations."""
@@ -218,105 +219,7 @@ class FileLocatorHandler(AsyncOperation):
         except Exception as e:
             self.logger.error(f"Error checking alternative locations: {e}")
             return set()
-            
-    async def repair_references(self, repairs: Dict[Path, Path]):
-        """
-        Repair file references in playlists.
-        
-        Args:
-            repairs: Dictionary mapping original paths to their replacements
-        """
-        if self.is_running:
-            self.logger.warning("Repair operation already in progress")
-            return
-            
-        self.is_running = True
-        
-        try:
-            self.state.operation_started.emit("Repairing References")
-            playlists_dir = Path(Config.PLAYLISTS_DIR)
-            
-            # Get all playlists
-            playlists = [p for p in playlists_dir.glob("*.m3u")
-                        if p.name != "Love.bak.m3u"]
-            
-            total_playlists = len(playlists)
-            repaired_count = 0
-            
-            for i, playlist_path in enumerate(playlists, 1):
-                if not self.is_running:
-                    break
-                    
-                # Update progress
-                progress = int((i - 1) / total_playlists * 100)
-                self.progress_updated.emit(progress)
-                self.status_updated.emit(f"Repairing: {playlist_path.name}")
-                
-                # Repair playlist
-                if await self._repair_playlist(playlist_path, repairs):
-                    repaired_count += 1
-                    
-                # Allow other operations
-                await asyncio.sleep(0)
-                
-            self.progress_updated.emit(100)
-            self.status_updated.emit(
-                f"Repaired references in {repaired_count} playlists")
-            
-        except Exception as e:
-            self.logger.error(f"Error during reference repair: {e}", exc_info=True)
-            self.error_occurred.emit(f"Error repairing references: {str(e)}")
-            
-        finally:
-            self.is_running = False
-            self.state.operation_completed.emit("Repair References")
-            
-    async def _repair_playlist(self, playlist_path: Path, 
-                             repairs: Dict[Path, Path]) -> bool:
-        """
-        Repair references in a single playlist.
-        
-        Args:
-            playlist_path: Path to playlist file
-            repairs: Dictionary of original paths to replacements
-            
-        Returns:
-            bool: True if playlist was modified
-        """
-        try:
-            # Read playlist content
-            paths = read_m3u(str(playlist_path))
-            if paths is None:
-                return False
-                
-            # Track if modifications were made
-            modified = False
-            
-            # Create new paths list
-            new_paths = []
-            for path in paths:
-                path_obj = Path(path)
-                if path_obj in repairs:
-                    new_paths.append(str(repairs[path_obj]))
-                    modified = True
-                else:
-                    new_paths.append(path)
-                    
-            # Write back if modified
-            if modified:
-                write_m3u(str(playlist_path), new_paths)
-                self.logger.info(f"Repaired references in {playlist_path.name}")
-                
-            return modified
-            
-        except Exception as e:
-            self.logger.error(f"Error repairing {playlist_path.name}: {e}")
-            return False
-            
-    def stop(self):
-        """Stop current operation."""
-        self.is_running = False
-            
+
     def cleanup(self):
         """Clean up resources."""
-        self.stop()
+        super().cleanup()

@@ -8,6 +8,7 @@ import logging
 from app.config import Config
 from gui.windows.pages.base_page import BasePage
 from gui.components.panels.base_status_panel import StatusPanel
+from core.context import ApplicationContext, SyncService, PlaylistService
 from .state import SyncPageState
 from .handlers import ConnectionHandler, AnalysisHandler, SyncHandler
 from .components import PlaylistPanel, SyncFilePanel
@@ -21,19 +22,21 @@ class SyncPage(BasePage):
         self.playlists_dir = Path(Config.PLAYLISTS_DIR)
         self.music_dir = Path(Config.LOCAL_BASE)
         
+        # Get application context
+        self.context = ApplicationContext.get_instance()
+        
         # Initialize state 
         self.state = SyncPageState()
         self.state.playlists_dir = self.playlists_dir  # Store for cache management
+        
+        # Get services from context
+        self.sync_service = self.context.get_service(SyncService)
+        self.playlist_service = self.context.get_service(PlaylistService)
         
         # Initialize tracking flags
         self._ui_initialized = False
         self._handlers_initialized = False
         self._signals_connected = False
-        
-        # Initialize handlers as None first
-        self.connection = None
-        self.analysis_handler = None
-        self.sync_handler = None
         
         super().__init__(parent)
 
@@ -73,6 +76,7 @@ class SyncPage(BasePage):
             
         except Exception as e:
             self.logger.error(f"Error initializing sync page: {e}", exc_info=True)
+            self.context.ui_service.show_error("Initialization Error", str(e))
             raise
 
     def _init_handlers(self):
@@ -80,11 +84,21 @@ class SyncPage(BasePage):
         try:
             self.logger.debug("Initializing handlers")
             self.connection = ConnectionHandler()
-            self.analysis_handler = AnalysisHandler(self.state, self.connection)
-            self.sync_handler = SyncHandler(self.state, self.connection)
+            self.analysis_handler = AnalysisHandler(
+                self.state, 
+                self.connection,
+                self.sync_service
+            )
+            self.sync_handler = SyncHandler(
+                self.state, 
+                self.connection,
+                self.sync_service,
+                self.playlist_service
+            )
             self._handlers_initialized = True
         except Exception as e:
             self.logger.error(f"Error initializing handlers: {e}")
+            self.context.ui_service.show_error("Handler Initialization Error", str(e))
             raise
         
     def setup_ui(self):
@@ -162,6 +176,7 @@ class SyncPage(BasePage):
             
         except Exception as e:
             self.logger.error(f"Error connecting signals: {e}")
+            self.context.ui_service.show_error("Signal Connection Error", str(e))
 
     def _handle_analyze_playlist(self, playlist_path: Path):
         """Handle single playlist analysis."""
@@ -238,6 +253,7 @@ class SyncPage(BasePage):
     def _on_error(self, error: str):
         """Handle error conditions."""
         self.logger.error(f"Error occurred: {error}")
+        self.context.ui_service.show_error("Operation Error", error)
                 
     def showEvent(self, event):
         """Handle show event."""
@@ -259,6 +275,7 @@ class SyncPage(BasePage):
 
         except Exception as e:
             self.logger.error(f"Error in show event: {e}", exc_info=True)
+            self.context.ui_service.show_error("Show Event Error", str(e))
 
     def _check_connection(self):
         """Check SSH connection after UI is rendered."""
@@ -273,8 +290,14 @@ class SyncPage(BasePage):
         try:
             super().hideEvent(event)
             self.logger.debug("Hiding sync page")
+            
+            # Cache state before hiding
+            if hasattr(self, 'state'):
+                self.state.cache_current_state()
+                
         except Exception as e:
             self.logger.error(f"Error in hide event: {e}")
+            self.context.ui_service.show_error("Hide Event Error", str(e))
         
     def cleanup(self):
         """Clean up resources."""
@@ -331,3 +354,4 @@ class SyncPage(BasePage):
             
         except Exception as e:
             self.logger.error(f"Error during sync page cleanup: {e}", exc_info=True)
+            self.context.ui_service.show_error("Cleanup Error", str(e))

@@ -1,0 +1,4 @@
+# all pages but curation
+gui/windows/pages/sync/
+gui/windows/pages/maintenance/
+gui/windows/pages/proximity/

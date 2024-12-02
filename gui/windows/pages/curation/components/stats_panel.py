@@ -25,14 +25,14 @@ class StatsPanel(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(16)
         
-        layout.addStretch()
+        #layout.addStretch()
         
         # Stats labels
         self.total_tracks = QLabel("Total tracks in playlists: 0")
         self.total_tracks.setFont(QFont("Segoe UI", 10))
         self.total_tracks.setStyleSheet("color: #999999;")
         
-        self.unplaylisted = QLabel("Loved not in playlist: 0")
+        self.unplaylisted = QLabel("Not in any playlist: 0")
         self.unplaylisted.setFont(QFont("Segoe UI", 10))
         self.unplaylisted.setStyleSheet("color: #999999;")
         
@@ -67,7 +67,7 @@ class StatsPanel(QWidget):
     def _on_stats_updated(self, total: int, unplaylisted: int):
         """Handle stats update"""
         self.total_tracks.setText(f"Total tracks in playlists: {total:,}")
-        self.unplaylisted.setText(f"Loved not in playlist: {unplaylisted:,}")
+        self.unplaylisted.setText(f"Not in any playlist: {unplaylisted:,}")
         
     def _on_collect_clicked(self):
         """Handle collect button click"""

@@ -20,6 +20,11 @@ class WindowHandler:
         self.logger = logging.getLogger('window_handler')
         self.last_title = None
         self.last_song_info: Optional[WindowTitleInfo] = None
+        self._poll_interval = 1000  # Default 1 second
+    
+    def set_poll_interval(self, interval: int):
+        """Set the polling interval in milliseconds."""
+        self._poll_interval = interval
     
     @staticmethod
     def get_dopamine_window() -> Optional[str]:

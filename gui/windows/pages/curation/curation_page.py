@@ -13,6 +13,7 @@ from gui.components.panels.base_status_panel import StatusPanel
 from core.matching.song_matcher import SongMatchResult
 from core.matching.window_handler import WindowHandler, WindowTitleInfo
 from core.playlist import PlaylistManager
+from core.context import ApplicationContext, WindowService, PlaylistService
 from .state import CurationState
 from .handlers import SongHandler, PlaylistHandler, StatsHandler
 from .components import PlaylistGrid, StatsPanel
@@ -22,26 +23,37 @@ from utils.m3u.parser import read_m3u, write_m3u
 class CurationPage(BasePage):
     """Page for playlist curation and management."""
     
-class CurationPage(BasePage):
     def __init__(self, parent=None):
-        # Initialize core state and managers first
+        # Initialize tracking flags first
+        self._ui_initialized = False
+        self._handlers_initialized = False
+        self._signals_connected = False
+
+        # Initialize core paths
         self.playlists_dir = Path(Config.PLAYLISTS_DIR)
         self.music_dir = Path(Config.LOCAL_BASE)
+        
+        # Get application context
+        self.context = ApplicationContext.get_instance()
         
         # Initialize state
         self.state = CurationState()
         self.state.playlists_dir = self.playlists_dir
         
-        # Initialize playlist manager
-        self.playlist_manager = PlaylistManager(
-            self.music_dir,
-            self.playlists_dir,
-            Path(Config.BACKUP_DIR)
-        )
+        # Get services from context
+        window_service = self.context.get_service(WindowService)
+        playlist_service = self.context.get_service(PlaylistService)
+        
+        # Initialize with services from context
+        self.window_handler = window_service.window_handler
+        self.song_matcher = window_service.song_matcher
+        self.playlist_manager = playlist_service.playlist_manager
+        
+        # Set playlist manager in state
         self.state.playlist_manager = self.playlist_manager
         
-        # Initialize handlers
-        self.song_handler = SongHandler(self.state)
+        # Initialize handlers with services
+        self.song_handler = SongHandler(self.state, self.window_handler, self.song_matcher)
         self.playlist_handler = PlaylistHandler(self.state)
         
         self.logger = logging.getLogger('curation_page')
@@ -52,93 +64,112 @@ class CurationPage(BasePage):
     def init_page(self):
         """Initialize page components."""
         try:
-            self.logger.debug("Initializing page components")
+            self.logger.debug("Initializing curation page components")
 
-            # Initialize panels with proper styling
-            self.playlist_grid = PlaylistGrid(
-                state=self.state,
-                parent=self
-            )
+            if not self._handlers_initialized:
+                self._init_handlers()
 
-            self.song_selection = SongSelectionWidget()
-            self.song_selection.setFixedHeight(40)
-            self.song_selection.selection_changed.connect(self._on_file_selection_changed)
+            if not self._ui_initialized:
+                from .components import PlaylistGrid, StatsPanel
+                from .components.song_selection_widget import SongSelectionWidget
 
-            # Initialize stats handler if needed
-            if not hasattr(self, 'stats_handler'):
-                self.stats_handler = StatsHandler(self.state, self.playlists_dir)
+                # Initialize panels
+                self.playlist_grid = PlaylistGrid(
+                    state=self.state,
+                    parent=self
+                )
+
+                self.song_selection = SongSelectionWidget()
+                self.song_selection.setFixedHeight(40)
+                self.song_selection.selection_changed.connect(self._on_file_selection_changed)
+
+                # Initialize stats handler if needed
+                if not hasattr(self, 'stats_handler'):
+                    self.stats_handler = StatsHandler(self.state, self.playlists_dir)
+
+                self._ui_initialized = True
 
             self.logger.debug("Page components initialized")
 
         except Exception as e:
             self.logger.error(f"Error initializing page: {e}", exc_info=True)
+            self.context.ui_service.show_error("Initialization Error", str(e))
+            raise
+            
+    def _init_handlers(self):
+        """Initialize handlers safely."""
+        try:
+            self.logger.debug("Initializing handlers")
+            if not hasattr(self, 'stats_handler') or self.stats_handler is None:
+                self.stats_handler = StatsHandler(self.state, self.playlists_dir)
+            self._handlers_initialized = True
+        except Exception as e:
+            self.logger.error(f"Error initializing handlers: {e}")
+            self.context.ui_service.show_error("Handler Initialization Error", str(e))
             raise
         
     def setup_ui(self):
-        """Set up the curation page UI with fullscreen layout."""
-        # Main layout with margins for visual spacing
-        layout = QVBoxLayout(self)
-        layout.setSpacing(8)
-        layout.setContentsMargins(12, 12, 12, 12)
+        """Set up the main UI layout."""
+        # If layout already exists, skip setup
+        if hasattr(self, '_layout'):
+            self.logger.debug("UI already set up, skipping")
+            return
+
+        self._layout = QVBoxLayout(self)
+        self._layout.setSpacing(12)
+        self._layout.setContentsMargins(12, 12, 12, 12)
         
         # Create main container
-        main_container = QWidget()
-        main_container.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        main_container = QWidget(self)
         main_container.setStyleSheet("background-color: #202020;")
+        self._layout.addWidget(main_container)
         
         # Main container layout
         main_layout = QVBoxLayout(main_container)
-        main_layout.setSpacing(8)
-        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(12)
+        main_layout.setContentsMargins(12, 12, 12, 12)
         
         # Song selection at top (fixed height)
-        self.song_selection = SongSelectionWidget()
-        self.song_selection.setFixedHeight(40)
-        self.song_selection.selection_changed.connect(self._on_file_selection_changed)
+        if not hasattr(self, 'song_selection'):
+            self.song_selection = SongSelectionWidget()
+            self.song_selection.setFixedHeight(40)
+            self.song_selection.selection_changed.connect(self._on_file_selection_changed)
         main_layout.addWidget(self.song_selection)
         
         # Playlist grid (takes remaining space)
-        self.playlist_grid = PlaylistGrid(self.state)
-        self.playlist_grid.setSizePolicy(
-            QSizePolicy.Policy.Expanding, 
-            QSizePolicy.Policy.Expanding
-        )
+        if not hasattr(self, 'playlist_grid'):
+            self.playlist_grid = PlaylistGrid(self.state)
+            self.playlist_grid.setSizePolicy(
+                QSizePolicy.Policy.Expanding, 
+                QSizePolicy.Policy.Expanding
+            )
         main_layout.addWidget(self.playlist_grid)
         
         # Bottom container for status and stats
         bottom_container = QWidget()
-        bottom_container.setFixedHeight(90)  # Combined height for status and stats
+        bottom_container.setFixedHeight(50)
         bottom_layout = QHBoxLayout(bottom_container)
         bottom_layout.setContentsMargins(0, 0, 0, 0)
         bottom_layout.setSpacing(8)
         
         # Status panel (left side)
-        self.status_panel = StatusPanel(self.state)
+        if not hasattr(self, 'status_panel'):
+            self.status_panel = StatusPanel(self.state)
         self.status_panel.setFixedHeight(40)
         bottom_layout.addWidget(self.status_panel)
         
         # Stats panel (right side)
-        self.stats_panel = StatsPanel(self.state)
+        if not hasattr(self, 'stats_panel'):
+            self.stats_panel = StatsPanel(self.state)
         self.stats_panel.setFixedHeight(40)
         bottom_layout.addWidget(self.stats_panel)
         
         main_layout.addWidget(bottom_container)
-        
-        # Add main container to page layout
-        layout.addWidget(main_container)
-        
-        # Connect signals
-        self.connect_signals()
-        
-        # Initial playlist load
-        self.refresh_playlists()
-        
-        # Start song detection
-        self.song_handler.start()
-        
-        # Initialize stats handler
-        from .handlers.stats_handler import StatsHandler
-        self.stats_handler = StatsHandler(self.state, self.playlists_dir)
+
+        # Connect signals if not already connected
+        if not hasattr(self, '_signals_connected') or not self._signals_connected:
+            self.connect_signals()
+            self._signals_connected = True
         
     def connect_signals(self):
         """Connect all component signals."""
@@ -167,6 +198,7 @@ class CurationPage(BasePage):
                 self.state.song_changed.connect(self._on_song_changed)
                 self.state.song_cleared.connect(self._on_song_cleared)
                 self.state.file_selection_changed.connect(self._on_file_selection_changed)
+                self.state.error_occurred.connect(self._on_error)
             
             # Connect song selection signals
             if hasattr(self, 'song_selection'):
@@ -176,6 +208,7 @@ class CurationPage(BasePage):
 
         except Exception as e:
             self.logger.error(f"Error connecting signals: {e}", exc_info=True)
+            self.context.ui_service.show_error("Signal Connection Error", str(e))
         
     def _on_playlist_clicked(self, playlist_path: Path):
         """Handle playlist click."""
@@ -215,7 +248,9 @@ class CurationPage(BasePage):
         # Update song handler
         self.song_handler.update_filepath_selection(file_path)
         
-        # State will handle playlist selections
+    def _on_error(self, error: str):
+        """Handle error events from state."""
+        self.context.ui_service.show_error("Operation Error", error)
 
     def _handle_selection_change(self, file_path: Path):
         """Handle selection changes from the song selection widget."""
@@ -230,28 +265,23 @@ class CurationPage(BasePage):
         """Start playlist stats calculation."""
         if hasattr(self, 'stats_handler'):
             self.stats_handler.start_analysis()
-            
+
     def showEvent(self, event):
         """Handle show event."""
         super().showEvent(event)
         try:
-            # Reinitialize UI components if needed
-            if not hasattr(self, 'playlist_grid') or self.playlist_grid is None:
-                self.logger.debug("Reinitializing UI components")
+            # Only initialize if needed
+            if not self._ui_initialized:
+                self.logger.debug("Initializing UI components")
                 self.init_page()
                 self.setup_ui()
-                self.connect_signals()
-
-            # Reinitialize song handler if needed
-            if not hasattr(self, 'song_handler') or self.song_handler is None:
-                self.logger.debug("Reinitializing song handler")
-                self.song_handler = SongHandler(self.state)
 
             self.logger.debug("Starting song detection")
-            self.song_handler.start()
+            if self.song_handler:
+                self.song_handler.start()
             
             # Refresh playlists
-            if hasattr(self, 'playlist_grid') and self.playlist_grid is not None:
+            if hasattr(self, 'playlist_grid'):
                 self.logger.debug("Refreshing playlists")
                 self.refresh_playlists()
                 self.calculate_stats()
@@ -270,62 +300,62 @@ class CurationPage(BasePage):
 
         except Exception as e:
             self.logger.error(f"Error in show event: {e}", exc_info=True)
+            self.context.ui_service.show_error("Show Event Error", str(e))
 
     def hideEvent(self, event):
         """Handle hide event."""
         try:
-            if hasattr(self, 'song_handler') and self.song_handler is not None:
-                self.logger.debug("Stopping song detection")
-                self.song_handler.stop()
-            if hasattr(self, 'state'):
-                self.logger.debug("Caching current state")
-                self.state.cache_current_state()
             super().hideEvent(event)
+            self.logger.debug("Hiding curation page")
+            
+            if self.song_handler:
+                self.song_handler.stop()
+                
+            if hasattr(self, 'state'):
+                self.state.cache_current_state()
+                
         except Exception as e:
             self.logger.error(f"Error in hide event: {e}")
-            
+            self.context.ui_service.show_error("Hide Event Error", str(e))
+                
     def cleanup(self):
         """Clean up resources."""
         try:
-            # Force logger output
-            logging.getLogger().setLevel(logging.DEBUG)
-            self.logger.setLevel(logging.DEBUG)
-            
             self.logger.debug("Starting curation page cleanup")
-            
-            # Stop song detection first
-            if hasattr(self, 'song_handler') and self.song_handler is not None:
-                self.logger.debug("Cleaning up song handler")
-                self.song_handler.cleanup()
-                self.song_handler = None
-
-            # Clean up song selection widget
-            if hasattr(self, 'song_selection'):
-                self.logger.debug("Cleaning up song selection widget")
-                self.song_selection.cleanup()
-                self.song_selection.deleteLater()
-                self.song_selection = None
 
             # Clean up handlers
-            if hasattr(self, 'playlist_handler'):
-                self.logger.debug("Cleaning up playlist handler")
-                self.playlist_handler.cleanup()
-                self.playlist_handler = None
+            if hasattr(self, 'song_handler'):
+                self.logger.debug("Cleaning up song handler")
+                self.song_handler.cleanup()
 
             if hasattr(self, 'stats_handler'):
                 self.logger.debug("Cleaning up stats handler")
                 self.stats_handler.cleanup()
-                self.stats_handler = None
 
-            # Clean up grid
-            if hasattr(self, 'playlist_grid'):
-                self.logger.debug("Cleaning up playlist grid")
-                self.playlist_grid.cleanup()
-                self.playlist_grid.deleteLater()
-                self.playlist_grid = None
+            # Clean up UI components
+            for component in ['song_selection', 'playlist_grid', 'status_panel', 'stats_panel']:
+                if hasattr(self, component):
+                    widget = getattr(self, component)
+                    if widget and hasattr(widget, 'cleanup'):
+                        self.logger.debug(f"Cleaning up {component}")
+                        widget.cleanup()
+                    if widget:
+                        widget.deleteLater()
+                    setattr(self, component, None)
+
+            # Remove layout if it exists
+            if hasattr(self, '_layout'):
+                QWidget().setLayout(self._layout)
+                delattr(self, '_layout')
+
+            # Reset initialization flags
+            self._ui_initialized = False
+            self._handlers_initialized = False
+            self._signals_connected = False
 
             # Call parent cleanup last
             super().cleanup()
             
         except Exception as e:
             self.logger.error(f"Error during cleanup: {e}", exc_info=True)
+            self.context.ui_service.show_error("Cleanup Error", str(e))

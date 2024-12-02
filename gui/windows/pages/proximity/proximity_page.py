@@ -2,272 +2,349 @@
 
 from pathlib import Path
 import logging
-from PyQt6.QtWidgets import QVBoxLayout
+from PyQt6.QtWidgets import QVBoxLayout, QWidget, QFrame, QLabel, QProgressBar
 from PyQt6.QtWebEngineWidgets import QWebEngineView
-from PyQt6.QtCore import QUrl
+from PyQt6.QtCore import Qt, QUrl, QThread, pyqtSignal
+from PyQt6.QtGui import QFont
 import tempfile
 import codecs
 import json
 
-from core.events.event_bus import Event, EventBus, EventType
 from app.config import Config
 from gui.windows.pages.base_page import BasePage
-from core.cache.relationship_cache import RelationshipCache
+from core.context import ApplicationContext
+from .state import ProximityState
+from .handlers.visualization_handler import VisualizationHandler
+from gui.components.panels.base_status_panel import StatusPanel
 
 class ProximityPage(BasePage):
+    """Page for visualizing playlist relationships."""
+    
+    initialization_complete = pyqtSignal()
+    
     def __init__(self, parent=None):
-        super().__init__(parent)
-        self.cache = RelationshipCache.get_instance()
-        self.event_bus = EventBus.get_instance()
+        # Initialize logger first
         self.logger = logging.getLogger('proximity_page')
+        
+        # Initialize paths and context
         self.playlists_dir = Path(Config.PLAYLISTS_DIR)
-        self.relationship_cache = RelationshipCache.get_instance()
-
-        # Connect to cache events
-        if not self.cache.is_initialized:
-            self.cache.initialized.connect(self._on_cache_ready)
-            
-        self.event_bus.event_occurred.connect(self._handle_event)        
+        self.context = ApplicationContext.get_instance()
         
-        # Load vis.js library content
-        resources_dir = Path(__file__).parent.parent.parent.parent / 'resources'
+        # Initialize state
+        self.state = ProximityState()
+        
+        # Initialize tracking flags
+        self._ui_initialized = False
+        self._handlers_initialized = False
+        self._signals_connected = False
+        self._cache_initialized = False
+        self._is_first_show = True
+        
+        super().__init__(parent)
+        
+        # Connect to cache initialization
+        self.context.cache.initialized.connect(self._on_cache_initialized)
+        
+    def init_page(self):
+        """Initialize page components."""
         try:
-            with open(resources_dir / 'vis-network.min.js', 'r', encoding='utf-8') as f:
-                self.vis_js = f.read()
-            with open(resources_dir / 'vis-network.min.css', 'r', encoding='utf-8') as f:
-                self.vis_css = f.read()
+            self.logger.debug("Initializing proximity page components")
+            
+            if not self._handlers_initialized:
+                self._init_handlers()
+                
+            if not self._ui_initialized:
+                self._init_ui_components()
+                
+            self.logger.debug("Proximity page components initialized")
+            
         except Exception as e:
-            self.logger.error(f"Failed to load vis.js resources: {e}")
-            self.vis_js = ""
-            self.vis_css = ""
+            self.logger.error(f"Error initializing proximity page: {e}", exc_info=True)
+            self.context.ui_service.show_error("Initialization Error", str(e))
+            raise
+            
+    def _init_handlers(self):
+        """Initialize handlers safely."""
+        try:
+            self.logger.debug("Initializing handlers")
+            
+            # Create and initialize visualization handler
+            self.visualization_handler = VisualizationHandler(
+                self.context,
+                self.playlists_dir
+            )
+            if not self.visualization_handler.initialize():  # Add this line
+                raise RuntimeError("Failed to initialize visualization handler")
+            
+            # Connect handler signals
+            self.visualization_handler.visualization_ready.connect(self._on_visualization_ready)
+            self.visualization_handler.error_occurred.connect(self._on_visualization_error)
+            
+            self._handlers_initialized = True
+            
+        except Exception as e:
+            self.logger.error(f"Error initializing handlers: {e}")
+            self.context.ui_service.show_error("Handler Initialization Error", str(e))
+            raise
+            
+    def _init_ui_components(self):
+        """Initialize UI components safely."""
+        try:
+            # Create loading overlay
+            self.loading_overlay = QWidget(self)
+            overlay_layout = QVBoxLayout(self.loading_overlay)
+            overlay_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            
+            loading_label = QLabel("Initializing visualization...", self.loading_overlay)
+            loading_label.setFont(QFont("Segoe UI", 12))
+            loading_label.setStyleSheet("color: white;")
+            overlay_layout.addWidget(loading_label)
+            
+            self.loading_progress = QProgressBar(self.loading_overlay)
+            self.loading_progress.setFixedWidth(300)
+            self.loading_progress.setStyleSheet("""
+                QProgressBar {
+                    border: none;
+                    border-radius: 2px;
+                    background-color: #2D2D2D;
+                    text-align: center;
+                }
+                QProgressBar::chunk {
+                    background-color: #0078D4;
+                    border-radius: 2px;
+                }
+            """)
+            overlay_layout.addWidget(self.loading_progress)
+            
+            self.loading_overlay.setStyleSheet("""
+                QWidget {
+                    background-color: #202020;
+                }
+            """)
+            
+            # Create main widget to hold visualization
+            self.visualization_widget = QWidget(self)
+            self.visualization_widget.setObjectName("visualization_container")
+            self.visualization_widget.hide()  # Hide until ready
+            
+            # Create layout
+            layout = QVBoxLayout(self.visualization_widget)
+            layout.setContentsMargins(0, 0, 0, 0)
+            layout.setSpacing(0)
+            
+            # Create web view in main thread
+            self.web_view = QWebEngineView()
+            self.web_view.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
+            
+            # Add status panel
+            self.status_panel = StatusPanel(self.state)
+            layout.addWidget(self.status_panel)
+            
+            # Add to layout
+            layout.addWidget(self.web_view)
+            
+            self._ui_initialized = True
+            
+        except Exception as e:
+            self.logger.error(f"Error initializing UI: {e}")
+            raise
         
-        self.init_ui()
-        self.update_visualization()
-        
-    def init_ui(self):
-        self.logger.debug("Setting up UI")
-        self.layout = QVBoxLayout(self)
-        self.web_view = QWebEngineView()
-        self.web_view.loadFinished.connect(self._on_load_finished)
-        self.web_view.loadProgress.connect(lambda p: self.logger.debug(f"Load progress: {p}%"))
-        self.layout.addWidget(self.web_view)
-
-    def _on_load_finished(self, ok):
-        if ok:
-            self.logger.info("Web view loaded successfully")
-        else:
-            self.logger.error("Failed to load web view")
-
-    def update_visualization(self):
-        """Update the network visualization."""
-        if not self.cache.is_initialized:
-            self.logger.debug("Cache not initialized, deferring visualization")
+    def setup_ui(self):
+        """Set up the main UI layout."""
+        if hasattr(self, '_layout'):
             return
             
-        try:
-            # Create nodes and edges
-            nodes_data = []
-            edges_data = []
-            
-            # Get all playlists
-            from utils.playlist import get_regular_playlists
-            playlists = get_regular_playlists(self.playlists_dir)
-            
-            # Create nodes (one per playlist)
-            for playlist_path in playlists:
-                nodes_data.append({
-                    'id': str(playlist_path),
-                    'label': playlist_path.stem,
-                    'color': self._random_dark_color()
-                })
-                
-                # Get relationships for edges
-                relationships = self.cache.get_related_playlists(str(playlist_path))
-                for target_id, strength in relationships.items():
-                    if str(playlist_path) < target_id:  # Avoid duplicate edges
-                        edges_data.append({
-                            'from': str(playlist_path),
-                            'to': target_id,
-                            'value': strength * 10,
-                            #'color': self._get_edge_color(strength)
-                        })
-
-            # Generate HTML with visualization
-            html = self._generate_visualization_html(nodes_data, edges_data)
-            
-            # Write to temp file and display
-            temp_path = Path(tempfile.gettempdir()) / "playlist_network.html"
-            with codecs.open(temp_path, 'w', encoding='utf-8') as f:
-                f.write(html)
-
-            self.web_view.setUrl(QUrl.fromLocalFile(str(temp_path)))
-
-        except Exception as e:
-            self.logger.error(f"Error updating visualization: {e}", exc_info=True)
-
-    def _random_dark_color(self):
-        """Generate a random dark color."""
-        import random
-        r = random.randint(63, 127)
-        g = random.randint(63, 127)
-        b = random.randint(63, 127)
-        return "#{:02x}{:02x}{:02x}".format(r, g, b)
-
-    def _generate_visualization_html(self, nodes_data, edges_data):
-        """Generate HTML for network visualization."""
-        return f"""
-            <!DOCTYPE html>
-            <html>
-            <head>
-                <meta charset="utf-8">
-                <title>Playlist Network</title>
-                <style type="text/css">
-                    {self.vis_css}
-                    #mynetwork {{
-                        width: 100%;
-                        height: 100vh;
-                        background-color: #202020;
-                    }}
-                    body {{
-                        margin: 0;
-                        padding: 0;
-                        background-color: #202020;
-                    }}
-                </style>
-                <script type="text/javascript">
-                    {self.vis_js}
-                </script>
-            </head>
-            <body>
-                <div id="mynetwork"></div>
-                <script type="text/javascript">
-                    const nodes = new vis.DataSet({json.dumps(nodes_data)});
-                    const edges = new vis.DataSet({json.dumps(edges_data)});
-
-                    const container = document.getElementById('mynetwork');
-                    const data = {{ nodes, edges }};
-                    const options = {{
-                        nodes: {{
-                            font: {{ color: 'white' }}
-                        }},
-                        edges: {{
-                            color: {{ inherit: false }},
-                            smooth: {{ type: 'continuous' }},
-                            width: 2
-                        }},
-                        interaction: {{ hover: true }},
-                        physics: {{
-                            forceAtlas2Based: {{
-                                gravitationalConstant: -100,
-                                springLength: 100,
-                                springConstant: 0.1
-                            }},
-                            minVelocity: 0.25,
-                            solver: 'forceAtlas2Based'
-                        }}
-                    }};
-
-                    const network = new vis.Network(container, data, options);
-
-                    function hexToRgba(hex, alpha) {{
-                        const r = parseInt(hex.slice(1, 3), 16);
-                        const g = parseInt(hex.slice(3, 5), 16);
-                        const b = parseInt(hex.slice(5, 7), 16);
-                        return `rgba(${{r}}, ${{g}}, ${{b}}, ${{alpha}})`;
-                    }}
-
-                    network.on('selectNode', function(params) {{
-                        const selectedNode = params.nodes[0];
-                        const connectedNodes = network.getConnectedNodes(selectedNode);
-
-                        nodes.forEach(node => {{
-                            if (node.id === selectedNode || connectedNodes.includes(node.id)) {{
-                                nodes.update({{
-                                    id: node.id,
-                                    color: node.originalColor,
-                                    opacity: 1,
-                                    font: {{ color: 'white' }}
-                                }});
-                            }} else {{
-                                nodes.update({{
-                                    id: node.id,
-                                    color: node.originalColor,
-                                    opacity: 0.2,
-                                    font: {{ color: 'rgba(255,255,255,0.2)' }}
-                                }});
-                            }}
-                        }});
-
-                        edges.forEach(edge => {{
-                            const isConnected = edge.from === selectedNode || edge.to === selectedNode;
-                            const color = edge.originalColor;
-                            const opacity = isConnected ? 1 : 0.2;
-                            
-                            edges.update({{
-                                id: edge.id,
-                                color: {{
-                                    color: hexToRgba(color, opacity),
-                                    hover: hexToRgba(color, 1)
-                                }}
-                            }});
-                        }});
-                    }});
-
-                    network.on('deselectNode', function() {{
-                        nodes.forEach(node => {{
-                            nodes.update({{
-                                id: node.id,
-                                color: node.originalColor,
-                                opacity: 1,
-                                font: {{ color: 'white' }}
-                            }});
-                        }});
-
-                        edges.forEach(edge => {{
-                            edges.update({{
-                                id: edge.id,
-                                color: {{
-                                    color: edge.originalColor,
-                                    hover: edge.originalColor
-                                }}
-                            }});
-                        }});
-                    }});
-                </script>
-            </body>
-            </html>
-        """
-
-    def _on_cache_ready(self):
-        """Handle cache initialization completion."""
-        self.update_visualization()
+        self._layout = QVBoxLayout(self)
+        self._layout.setSpacing(0)
+        self._layout.setContentsMargins(0, 0, 0, 0)
         
-    def _handle_event(self, event: Event):
-        """Handle events from the event bus."""
-        if event.type == EventType.RELATIONSHIPS_CHANGED:
-            self.update_visualization()
-
+        # Create container frame
+        container = QFrame(self)
+        container.setStyleSheet("""
+            QFrame {
+                background-color: #202020;
+                border: none;
+            }
+        """)
+        
+        # Container layout
+        container_layout = QVBoxLayout(container)
+        container_layout.setContentsMargins(0, 0, 0, 0)
+        container_layout.setSpacing(0)
+        
+        # Add loading overlay first
+        container_layout.addWidget(self.loading_overlay)
+        
+        # Add visualization widget
+        container_layout.addWidget(self.visualization_widget)
+        
+        # Add to main layout
+        self._layout.addWidget(container)
+        
+        # Connect signals if needed
+        if not self._signals_connected:
+            self.connect_signals()
+            self._signals_connected = True
+            
+    def connect_signals(self):
+        """Connect all component signals."""
+        try:
+            # Connect web view signals
+            self.web_view.loadFinished.connect(self._on_load_finished)
+            
+            # Connect state signals
+            self.state.visualization_updated.connect(self._on_visualization_updated)
+            self.state.error_occurred.connect(self._on_state_error)
+            
+            self._signals_connected = True
+            
+        except Exception as e:
+            self.logger.error(f"Error connecting signals: {e}")
+            self.context.ui_service.show_error("Signal Connection Error", str(e))
+            
+    def _on_cache_initialized(self):
+        """Handle cache initialization completion."""
+        self.logger.debug("Cache initialization complete")
+        self._cache_initialized = True
+        self.loading_progress.setValue(50)
+        
+        if hasattr(self, 'visualization_handler'):
+            self._try_update_visualization()
+            
+    def _try_update_visualization(self):
+        """Attempt to update visualization if all conditions are met."""
+        if not self._cache_initialized:
+            self.logger.debug("Cache not initialized, deferring visualization")
+            return False
+            
+        if not self._ui_initialized:
+            self.logger.debug("UI not initialized, deferring visualization")
+            return False
+            
+        try:
+            self.loading_progress.setValue(75)
+            success = self.visualization_handler.update_visualization()
+            
+            if success:
+                self.loading_progress.setValue(100)
+                self.loading_overlay.hide()
+                self.visualization_widget.show()
+                
+            return success
+            
+        except Exception as e:
+            self.logger.error(f"Error updating visualization: {e}")
+            self.context.ui_service.show_error("Visualization Error", str(e))
+            return False
+            
+    def _on_load_finished(self, ok: bool):
+        """Handle web view load completion."""
+        if ok:
+            self.logger.debug("Visualization loaded successfully")
+            if hasattr(self, 'visualization_handler'):
+                self.visualization_handler.setup_web_channel(self.web_view)
+        else:
+            self.logger.error("Failed to load visualization")
+            self.context.ui_service.show_error(
+                "Visualization Error",
+                "Failed to load network visualization"
+            )
+            
+    def _on_visualization_ready(self, html_path: str):
+        """Handle visualization HTML ready."""
+        try:
+            self.web_view.setUrl(QUrl.fromLocalFile(html_path))
+        except Exception as e:
+            self.logger.error(f"Error loading visualization: {e}")
+            self.context.ui_service.show_error(
+                "Visualization Error",
+                "Failed to display visualization"
+            )
+            
+    def _on_visualization_error(self, error: str):
+        """Handle visualization errors."""
+        self.logger.error(f"Visualization error: {error}")
+        self.context.ui_service.show_error("Visualization Error", error)
+            
+    def _on_visualization_updated(self):
+        """Handle visualization update completion."""
+        self.state.set_status("Visualization updated successfully")
+        
+    def _on_state_error(self, error: str):
+        """Handle state errors."""
+        self.context.ui_service.show_error("State Error", error)
+        
     def showEvent(self, event):
         """Handle show event."""
         super().showEvent(event)
-        self.logger.debug("Show event triggered - updating visualization")
-        
-        # Initialize cache if needed
-        if not self.relationship_cache._initialized:
-            # Use AsyncHelper to run initialization
-            from gui.workers.async_base import AsyncHelper
-            helper = AsyncHelper(self._initialize_cache())
-            helper.start()
-            
-        self.update_visualization()
-    
-    async def _initialize_cache(self):
-        """Initialize relationship cache with progress tracking."""
         try:
-            self.logger.debug("Initializing relationship cache")
-            await self.relationship_cache.initialize(
-                self.playlists_dir,
-                lambda p: self.logger.debug(f"Cache initialization progress: {p}%")
-            )
+            # Initialize if needed
+            if self._is_first_show:
+                self.init_page()
+                self.setup_ui()
+                self._is_first_show = False
+                
+            # Show loading overlay
+            self.loading_overlay.show()
+            self.visualization_widget.hide()
+            self.loading_progress.setValue(25)
+                
+            # Update visualization
+            self._try_update_visualization()
+                
         except Exception as e:
-            self.logger.error(f"Failed to initialize relationship cache: {e}")
+            self.logger.error(f"Error in show event: {e}", exc_info=True)
+            self.context.ui_service.show_error("Show Event Error", str(e))
+            
+    def hideEvent(self, event):
+        """Handle hide event."""
+        try:
+            super().hideEvent(event)
+            self.logger.debug("Hiding proximity page")
+            
+            # Cache state before hiding
+            if hasattr(self, 'state'):
+                self.state.cache_current_state()
+                
+        except Exception as e:
+            self.logger.error(f"Error in hide event: {e}")
+            self.context.ui_service.show_error("Hide Event Error", str(e))
+            
+    def cleanup(self):
+        """Clean up resources."""
+        try:
+            self.logger.debug("Starting proximity page cleanup")
+            
+            # Clean up visualization handler
+            if hasattr(self, 'visualization_handler'):
+                self.visualization_handler.cleanup()
+                self.visualization_handler = None
+                
+            # Clean up web view
+            if hasattr(self, 'web_view'):
+                self.web_view.setUrl(QUrl())
+                self.web_view.deleteLater()
+                self.web_view = None
+                
+            # Clean up status panel
+            if hasattr(self, 'status_panel'):
+                self.status_panel.cleanup()
+                self.status_panel = None
+                
+            # Reset flags
+            self._ui_initialized = False
+            self._handlers_initialized = False
+            self._signals_connected = False
+            self._cache_initialized = False
+            
+            # Remove layout
+            if hasattr(self, '_layout'):
+                QWidget().setLayout(self._layout)
+                delattr(self, '_layout')
+                
+            # Call parent cleanup
+            super().cleanup()
+            
+        except Exception as e:
+            self.logger.error(f"Error during proximity page cleanup: {e}", exc_info=True)
+            self.context.ui_service.show_error("Cleanup Error", str(e))

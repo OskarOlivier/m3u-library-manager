@@ -10,7 +10,7 @@ from core.playlist.safety import PlaylistSafety
 from app.config import Config
 from utils.m3u.parser import read_m3u, write_m3u
 from gui.dialogs.safety_dialogs import SafetyDialogs
-from gui.workers.async_base import AsyncOperation  # Updated import path
+from gui.workers.async_base import AsyncOperation
 
 class RepairHandler(AsyncOperation):
     """

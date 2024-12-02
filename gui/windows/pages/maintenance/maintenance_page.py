@@ -8,9 +8,10 @@ import logging
 from app.config import Config
 from gui.windows.pages.base_page import BasePage
 from gui.components.panels.base_status_panel import StatusPanel
+from core.context import ApplicationContext, PlaylistService, SyncService
 from .state import MaintenanceState
 from .handlers import DeleteHandler, RepairHandler, AnalysisHandler
-from core.playlist import PlaylistManager
+from .components import PlaylistPanel, FileLocatorPanel, SortPanel
 
 class MaintenancePage(BasePage):
     """Page for managing playlist health and organization."""
@@ -22,6 +23,13 @@ class MaintenancePage(BasePage):
         # Initialize paths
         self.playlists_dir = Path(Config.PLAYLISTS_DIR)
         
+        # Get application context
+        self.context = ApplicationContext.get_instance()
+        
+        # Get services from context
+        self.playlist_service = self.context.get_service(PlaylistService)
+        self.sync_service = self.context.get_service(SyncService)
+        
         # Initialize tracking flags
         self._ui_initialized = False
         self._handlers_initialized = False
@@ -31,13 +39,6 @@ class MaintenancePage(BasePage):
         self.delete_handler = None
         self.repair_handler = None
         self.analysis_handler = None
-        
-        # Initialize playlist manager
-        self.playlist_manager = PlaylistManager(
-            Path(Config.LOCAL_BASE),
-            Path(Config.PLAYLISTS_DIR),
-            Path(Config.BACKUP_DIR)
-        )
         
         self.logger = logging.getLogger('maintenance_page')
         super().__init__()
@@ -54,7 +55,9 @@ class MaintenancePage(BasePage):
                 from .components import PlaylistPanel, FileLocatorPanel, SortPanel
                 
                 # Initialize panels
-                self.playlist_panel = PlaylistPanel(state=self.state)
+                self.playlist_panel = PlaylistPanel(
+                    state=self.state,
+                )
                 self.file_locator_panel = FileLocatorPanel(state=self.state)
                 self.sort_panel = SortPanel(state=self.state)
                 self.status_panel = StatusPanel(self.state)
@@ -65,6 +68,7 @@ class MaintenancePage(BasePage):
             
         except Exception as e:
             self.logger.error(f"Error initializing maintenance page: {e}", exc_info=True)
+            self.context.ui_service.show_error("Initialization Error", str(e))
             raise
 
     def _init_handlers(self):
@@ -73,10 +77,13 @@ class MaintenancePage(BasePage):
             self.logger.debug("Initializing handlers")
             self.delete_handler = DeleteHandler()
             self.repair_handler = RepairHandler()
-            self.analysis_handler = AnalysisHandler(self.state)
+            self.analysis_handler = AnalysisHandler(
+                self.sync_service
+            )
             self._handlers_initialized = True
         except Exception as e:
             self.logger.error(f"Error initializing handlers: {e}")
+            self.context.ui_service.show_error("Handler Initialization Error", str(e))
             raise
         
     def setup_ui(self):
@@ -155,6 +162,7 @@ class MaintenancePage(BasePage):
             
         except Exception as e:
             self.logger.error(f"Error connecting signals: {e}")
+            self.context.ui_service.show_error("Signal Connection Error", str(e))
             
     def showEvent(self, event):
         """Handle show event."""
@@ -182,6 +190,7 @@ class MaintenancePage(BasePage):
 
         except Exception as e:
             self.logger.error(f"Error in show event: {e}", exc_info=True)
+            self.context.ui_service.show_error("Show Event Error", str(e))
             
     def hideEvent(self, event):
         """Handle hide event."""
@@ -191,8 +200,14 @@ class MaintenancePage(BasePage):
             # Clear selection when page is hidden
             if hasattr(self, 'state'):
                 self.state.set_current_playlist(None)
+                
+            # Cache state before hiding
+            if hasattr(self, 'state'):
+                self.state.cache_current_state()
+                
         except Exception as e:
             self.logger.error(f"Error in hide event: {e}")
+            self.context.ui_service.show_error("Hide Event Error", str(e))
                     
     def cleanup(self):
         """Clean up resources."""
@@ -249,3 +264,4 @@ class MaintenancePage(BasePage):
             
         except Exception as e:
             self.logger.error(f"Error during maintenance page cleanup: {e}", exc_info=True)
+            self.context.ui_service.show_error("Cleanup Error", str(e))

@@ -1,23 +1,26 @@
 # core/events/event_bus.py
-from PyQt6.QtCore import QObject, pyqtSignal
-from typing import Dict, Any, Optional
-from pathlib import Path
 
+from pathlib import Path
+from datetime import datetime
+from dataclasses import dataclass
+from PyQt6.QtCore import QObject, pyqtSignal
+from typing import Optional, Dict, Any
+
+@dataclass
+class Event:
+    """Simple event class."""
+    type: str
+    data: Optional[Dict[str, Any]] = None
+
+# Common event types
 class EventType:
-    """Enumeration of event types."""
     CACHE_READY = "cache_ready"
     CACHE_UPDATED = "cache_updated"
     RELATIONSHIPS_CHANGED = "relationships_changed"
-    # Add more event types as needed
-
-class Event:
-    """Base event class."""
-    def __init__(self, event_type: str, data: Optional[Dict[str, Any]] = None):
-        self.type = event_type
-        self.data = data or {}
-
+    CONTEXT_INITIALIZED = "context_initialized"
+    
 class EventBus(QObject):
-    """Central event bus for application-wide events."""
+    """Central event bus using Qt signals."""
     
     event_occurred = pyqtSignal(Event)
     
@@ -35,7 +38,7 @@ class EventBus(QObject):
         return cls._instance
         
     def emit_event(self, event_type: str, data: Optional[Dict[str, Any]] = None):
-        """Emit an event with optional data."""
+        """Emit an event."""
         event = Event(event_type, data)
         self.event_occurred.emit(event)
 

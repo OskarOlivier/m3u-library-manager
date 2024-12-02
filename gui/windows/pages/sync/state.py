@@ -3,8 +3,10 @@
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Dict, Set
-from PyQt6.QtCore import QObject, pyqtSignal
-import logging
+from PyQt6.QtCore import pyqtSignal
+import json
+
+from core.state.base_state import BaseState
 
 @dataclass
 class PlaylistAnalysis:
@@ -13,24 +15,30 @@ class PlaylistAnalysis:
     missing_locally: Set[Path]
     exists_remotely: bool
     
-    @property
+    @property 
     def is_synced(self) -> bool:
-        """Check if playlist is fully synced."""
         return (self.exists_remotely and 
                 len(self.missing_remotely) == 0 and 
                 len(self.missing_locally) == 0)
     
     @property
     def has_differences(self) -> bool:
-        """Check if playlist has any differences that need syncing."""
         return len(self.missing_remotely) > 0 or len(self.missing_locally) > 0
 
-class SyncPageState(QObject):
+@dataclass
+class SyncStateData:
+    """Serializable sync state data."""
+    current_playlist: Optional[str] = None
+    analyses: Dict[str, dict] = None  # Serialized PlaylistAnalysis objects
+    total_playlists: int = 0
+    analyzed_playlists: int = 0
+
+class SyncPageState(BaseState[SyncStateData]):
     """Manages state and signals for sync page components."""
     
     # Analysis signals
-    analysis_started = pyqtSignal(Path)  # Emitted when analysis begins
-    analysis_completed = pyqtSignal(Path, object)  # Emitted with results
+    analysis_started = pyqtSignal(Path)
+    analysis_completed = pyqtSignal(Path, object)
     analysis_all_started = pyqtSignal()
     analysis_all_completed = pyqtSignal()
     
@@ -43,11 +51,6 @@ class SyncPageState(QObject):
     sync_completed = pyqtSignal()
     sync_progress = pyqtSignal(int)  # Progress percentage
     
-    # Status signals
-    status_changed = pyqtSignal(str)
-    error_occurred = pyqtSignal(str)
-    progress_updated = pyqtSignal(int)
-        
     def __init__(self):
         super().__init__()
         self.current_playlist: Optional[Path] = None
@@ -57,108 +60,105 @@ class SyncPageState(QObject):
         self.total_playlists = 0
         self.analyzed_playlists = 0
         self.playlists_dir: Optional[Path] = None
-        self.logger = logging.getLogger('sync_state')
-        self.logger.setLevel(logging.DEBUG)
+
+    async def _do_initialize(self) -> None:
+        """Initialize state data."""
+        await super()._do_initialize()
+        self.set_status("Sync state initialized")
+
+    def _do_reset(self) -> None:
+        """Reset state to initial values."""
+        self.current_playlist = None
+        self.analyses.clear()
+        self.is_analyzing = False
+        self.is_syncing = False
+        self.total_playlists = 0
+        self.analyzed_playlists = 0
+
+    def _get_serializable_state(self) -> dict:
+        """Convert state to serializable format."""
+        return {
+            'current_playlist': str(self.current_playlist) if self.current_playlist else None,
+            'analyses': {
+                str(path): self._serialize_analysis(analysis)
+                for path, analysis in self.analyses.items()
+            },
+            'total_playlists': self.total_playlists,
+            'analyzed_playlists': self.analyzed_playlists
+        }
+
+    def _restore_from_state(self, state_data: dict) -> None:
+        """Restore state from serialized data."""
+        if state_data.get('current_playlist'):
+            self.current_playlist = Path(state_data['current_playlist'])
+            
+        self.analyses = {
+            Path(path): self._deserialize_analysis(data)
+            for path, data in state_data.get('analyses', {}).items()
+        }
         
+        self.total_playlists = state_data.get('total_playlists', 0)
+        self.analyzed_playlists = state_data.get('analyzed_playlists', 0)
+        
+        # Re-emit signals for restored state
+        if self.current_playlist:
+            self.playlist_selected.emit(self.current_playlist)
+
+    def _serialize_analysis(self, analysis: PlaylistAnalysis) -> dict:
+        """Convert PlaylistAnalysis to serializable format."""
+        return {
+            'missing_remotely': [str(p) for p in analysis.missing_remotely],
+            'missing_locally': [str(p) for p in analysis.missing_locally],
+            'exists_remotely': analysis.exists_remotely
+        }
+
+    def _deserialize_analysis(self, data: dict) -> PlaylistAnalysis:
+        """Create PlaylistAnalysis from serialized data."""
+        return PlaylistAnalysis(
+            missing_remotely={Path(p) for p in data['missing_remotely']},
+            missing_locally={Path(p) for p in data['missing_locally']},
+            exists_remotely=data['exists_remotely']
+        )
+
     def set_current_playlist(self, playlist: Optional[Path], emit: bool = True) -> None:
         """Update current playlist selection."""
         if playlist != self.current_playlist:
-            self.logger.debug(f"Updating current playlist: {playlist}")
-            old_playlist = self.current_playlist
             self.current_playlist = playlist
             
             if emit:
                 if playlist is not None:
-                    self.logger.debug(f"Emitting playlist_selected for: {playlist}")
                     self.playlist_selected.emit(playlist)
-                    
-                    # Log cached analysis state if available
-                    if playlist in self.analyses:
-                        analysis = self.analyses[playlist]
-                        self.logger.debug(f"Found cached analysis - Remote: {len(analysis.missing_remotely)}, "
-                                        f"Local: {len(analysis.missing_locally)}")
-                    else:
-                        self.logger.debug("No cached analysis found for newly selected playlist")
                 else:
-                    self.logger.debug("Emitting playlist_deselected")
                     self.playlist_deselected.emit()
-                
+
     def get_analysis(self, playlist: Path) -> Optional[PlaylistAnalysis]:
         """Get analysis results for a playlist if available."""
-        result = self.analyses.get(playlist)
-        if result:
-            self.logger.debug(f"Retrieved analysis for {playlist.name} - "
-                            f"Remote: {len(result.missing_remotely)}, "
-                            f"Local: {len(result.missing_locally)}")
-        else:
-            self.logger.debug(f"No analysis found for {playlist.name}")
-        return result
-    
+        return self.analyses.get(playlist)
+
     def set_analysis(self, playlist_path: Path, analysis: PlaylistAnalysis) -> None:
         """Store analysis results for a playlist."""
-        self.logger.debug(f"Storing analysis for {playlist_path.name}")
-        self.logger.debug(f"Analysis details - Remote: {len(analysis.missing_remotely)}, "
-                         f"Local: {len(analysis.missing_locally)}, "
-                         f"Exists remotely: {analysis.exists_remotely}")
-        
         self.analyses[playlist_path] = analysis
+        self.analysis_completed.emit(playlist_path, analysis)
         
-        # If this is the currently selected playlist, re-emit selection to trigger update
+        # If this is the current playlist, re-emit selection
         if playlist_path == self.current_playlist:
-            self.logger.debug("Analysis completed for currently selected playlist - triggering update")
-            # First emit analysis completion
-            self.analysis_completed.emit(playlist_path, analysis)
-            # Then re-emit selection to ensure panels update
             self.playlist_selected.emit(playlist_path)
-        else:
-            # Just emit analysis completion for non-selected playlists
-            self.analysis_completed.emit(playlist_path, analysis)
 
     def start_sync(self, operation: str):
         """Start a sync operation."""
-        self.logger.debug(f"Starting sync operation: {operation}")
         self.is_syncing = True
         self.sync_started.emit(operation)
         self.set_status(f"Starting {operation} operation...")
 
     def finish_sync(self):
         """Complete the sync operation."""
-        self.logger.debug("Finishing sync operation")
         self.is_syncing = False
         self.sync_completed.emit()
         self.update_progress(100)
         self.set_status("Sync operation completed")
-        
-    def clear_analysis(self, playlist: Path) -> None:
-        """Clear analysis results for a playlist."""
-        if playlist in self.analyses:
-            self.logger.debug(f"Clearing analysis for {playlist.name}")
-            del self.analyses[playlist]
-            
-    def clear_all_analyses(self) -> None:
-        """Clear all analysis results."""
-        self.logger.debug(f"Clearing all analyses ({len(self.analyses)} entries)")
-        self.analyses.clear()
-        
-    def update_progress(self, value: int) -> None:
-        """Update progress value."""
-        self.progress_updated.emit(value)
-        self.sync_progress.emit(value)
-        
-    def set_status(self, status: str) -> None:
-        """Update status message."""
-        self.logger.debug(f"Status: {status}")
-        self.status_changed.emit(status)
-        
-    def report_error(self, error: str) -> None:
-        """Report an error condition."""
-        self.logger.error(f"Error: {error}")
-        self.error_occurred.emit(error)
-        self.set_status(f"Error: {error}")
-        
+
     def start_bulk_analysis(self, total: int):
         """Start bulk analysis with total count."""
-        self.logger.debug(f"Starting bulk analysis of {total} playlists")
         self.total_playlists = total
         self.analyzed_playlists = 0
         self.analysis_all_started.emit()
@@ -168,23 +168,46 @@ class SyncPageState(QObject):
         """Update bulk analysis progress."""
         self.analyzed_playlists += 1
         progress = int((self.analyzed_playlists / self.total_playlists) * 100)
-        self.logger.debug(f"Analysis progress: {self.analyzed_playlists}/{self.total_playlists} "
-                         f"({progress}%) - Current: {playlist.name}")
         self.update_progress(progress)
 
     def finish_analysis(self):
         """Complete the analysis process."""
-        self.logger.debug("Finishing analysis process")
         self.is_analyzing = False
         self.total_playlists = 0
         self.analyzed_playlists = 0
         self.analysis_all_completed.emit()
         self.update_progress(100)
-            
+
     def is_playlist_uploadable(self, playlist_path: Path) -> bool:
         """Check if a playlist can be uploaded."""
         if not playlist_path:
             return False
-            
         analysis = self.get_analysis(playlist_path)
         return analysis is not None and not analysis.exists_remotely
+        
+    def cache_current_state(self) -> bool:
+        """
+        Cache current playlist and analysis state.
+        
+        Returns:
+            bool: True if state was cached, False if nothing to cache
+        """
+        if not (self.current_playlist or self.analyses):
+            return False
+            
+        # Save state to cache file
+        self.save_state('sync')
+        return True
+
+    def restore_cached_state(self) -> bool:
+        """
+        Restore cached playlist and analysis state.
+        
+        Returns:
+            bool: True if state was restored, False if no cache exists
+        """
+        if self.load_state('sync'):
+            if self.current_playlist:
+                self.playlist_selected.emit(self.current_playlist)
+            return True
+        return False
