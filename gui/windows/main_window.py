@@ -6,6 +6,7 @@ from PyQt6.QtCore import Qt, QPoint, QTimer, QSize, QRect, pyqtSignal
 from PyQt6.QtGui import QFont, QScreen
 from pathlib import Path
 import logging
+import asyncio
 
 from core.events.event_bus import EventBus
 from core.cache.relationship_cache import RelationshipCache
@@ -82,17 +83,12 @@ class NavigationButton(QLabel):
 
 class MainWindow(QMainWindow):
     def __init__(self):
+        # Initialize with the frameless flag but don't set geometry yet
         super().__init__(flags=Qt.WindowType.FramelessWindowHint)
 
         # Initialize logger
         self.logger = logging.getLogger('MainWindow')
         self.logger.info("Initializing main window")
-
-        # Initialize context and ensure it's ready
-        self.context = ApplicationContext.get_instance()
-        #if not self.context.is_initialized():
-        #    self.logger.info("Initializing application context")
-        #    self.context.ensure_initialized(Path(Config.PLAYLISTS_DIR))
 
         # Initialize tracking variables
         self.oldPos = None
@@ -101,25 +97,28 @@ class MainWindow(QMainWindow):
         self.current_page = None
         self.is_quitting = False
 
+        # Initialize context and ensure cache is ready synchronously
+        self.context = ApplicationContext.get_instance()
+        if not self.context.cache.is_initialized:
+            self.logger.info("Initializing cache")
+            asyncio.get_event_loop().run_until_complete(
+                self.context.cache.initialize(Path(Config.PLAYLISTS_DIR))
+            )
+            self.logger.info("Cache initialization complete")
+
         # Initialize pages and UI
         self.init_pages()
         self.setup_ui()
         
-        # Set up fullscreen
-        self.make_fullscreen()
+        # Set window geometry before showing
+        self._setup_window_geometry()
         
-        # Setup cleanup button update timer
-        self.cleanup_update_timer = QTimer(self)
-        self.cleanup_update_timer.timeout.connect(self.update_cleanup_button)
-        self.cleanup_update_timer.start(5000)  # Update every 5 seconds
-        self.update_cleanup_button()
-
         # Start with curation page
         self.switch_page('curation')
         self.logger.info("Main window initialization complete")
 
-    def make_fullscreen(self):
-        """Set up fullscreen mode within screen constraints."""
+    def _setup_window_geometry(self):
+        """Set up window geometry without causing flashing."""
         try:
             screen = QApplication.primaryScreen()
             if not screen:
@@ -130,19 +129,16 @@ class MainWindow(QMainWindow):
             available_geometry = screen.availableGeometry()
             self.logger.debug(f"Screen available geometry: {available_geometry}")
 
-            # Set window geometry to match available screen space
-            self.setGeometry(available_geometry)
-            
-            # Set minimum size to prevent window from being too small
+            # Set minimum size
             min_width = min(1024, available_geometry.width())
             min_height = min(768, available_geometry.height())
             self.setMinimumSize(min_width, min_height)
-            
-            # Show maximized
-            self.showMaximized()
-            
+
+            # Set window geometry
+            self.setGeometry(available_geometry)
+
         except Exception as e:
-            self.logger.error(f"Error setting up fullscreen: {e}", exc_info=True)
+            self.logger.error(f"Error setting up window geometry: {e}", exc_info=True)
                    
     def setup_ui(self):
         """Set up the main UI with fullscreen layout."""

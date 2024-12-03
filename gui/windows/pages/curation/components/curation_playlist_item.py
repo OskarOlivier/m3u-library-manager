@@ -25,7 +25,7 @@ class CurationPlaylistItem(PlaylistItem):
         self._exists_remotely = True
         self._details: Optional[str] = None
         self.logger = logging.getLogger(f'curation_playlist_item_{playlist_path.stem}')
-        self.logger.setLevel(logging.DEBUG)
+        self.logger.setLevel(logging.INFO)
         super().__init__(playlist_path, track_count, parent)
         
     def mousePressEvent(self, event):

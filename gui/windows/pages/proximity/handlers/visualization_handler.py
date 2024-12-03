@@ -1,10 +1,11 @@
-# gui/windows/pages/proximity/handlers/visualization_handler.py
+# gui/windows/pages/proximity/handlers/visuali\.py
 
 from PyQt6.QtCore import pyqtSignal
 from PyQt6.QtWebEngineWidgets import QWebEngineView
 from pathlib import Path
 import tempfile
 import codecs
+import logging
 from typing import Dict, List, Optional, Set
 
 from core.handlers.base_handler import BaseHandler
@@ -29,6 +30,10 @@ class VisualizationHandler(BaseHandler):
         self.playlists_dir = playlists_dir
         self.relationship_cache = context.cache
         
+        # Add cache initialization tracking
+        self._cache_ready = False
+        self.relationship_cache.initialized.connect(self._on_cache_initialized)
+
         # Initialize components
         self.html_generator = VisualizationHTMLGenerator()
         self.network_handler = None
@@ -100,13 +105,17 @@ class VisualizationHandler(BaseHandler):
                 
             if not self.relationship_cache.is_initialized:
                 self.logger.warning("Cache not initialized")
-                return
+                return False
                 
             self.update_status("Generating visualization...")
             
             # Generate data
             nodes_data, edges_data = self._generate_network_data()
             
+            if not nodes_data:
+                self.logger.warning("No nodes data generated")
+                return False
+                
             # Generate HTML
             html_content = self.html_generator.generate_html(nodes_data, edges_data)
             
@@ -125,6 +134,11 @@ class VisualizationHandler(BaseHandler):
         except Exception as e:
             self.report_error(f"Failed to update visualization: {str(e)}")
             return False
+            
+    def _on_cache_initialized(self):
+        """Handle cache initialization completion."""
+        self._cache_ready = True
+        self.update_status("Cache initialized")
             
     def _generate_network_data(self) -> tuple[List[Dict], List[Dict]]:
         """Generate nodes and edges data from relationships."""
@@ -154,8 +168,8 @@ class VisualizationHandler(BaseHandler):
                         edges_data.append({
                             'from': str(playlist_path),
                             'to': target_id,
-                            'value': strength * 10,  # Scale for visibility
-                            'title': f"{strength:.1%} similarity"
+                            'value': strength,  # Scale for visibility
+                            'title': f"{strength} similarity"
                         })
                         
             return nodes_data, edges_data

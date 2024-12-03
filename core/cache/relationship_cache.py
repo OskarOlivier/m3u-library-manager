@@ -25,7 +25,8 @@ class RelationshipMetrics:
         """Get normalized relationship score (0-1)."""
         if self.source_size == 0 or self.target_size == 0:
             return 0.0
-        return self.intersection_size / min(self.source_size, self.target_size)
+        #return self.intersection_size / (max(self.source_size, self.target_size) / 10)
+        return self.intersection_size
     
     @property
     def has_relationship(self) -> bool:
@@ -45,6 +46,7 @@ class RelationshipCache(CacheBase):
         self._track_to_playlists: Dict[str, Set[str]] = defaultdict(set)
         self._playlist_tracks: Dict[str, Set[str]] = {}
         self.logger = logging.getLogger('relationship_cache')
+        self.logger.setLevel(logging.INFO)
         self.event_bus = EventBus.get_instance()
         self._initialization_lock = asyncio.Lock()
         self._initialization_started = False
@@ -59,9 +61,13 @@ class RelationshipCache(CacheBase):
     async def initialize(self, playlists_dir: Path, 
                         progress_callback: Optional[callable] = None) -> None:
         """Initialize cache with all playlists asynchronously."""
+    async def initialize(self, playlists_dir: Path, 
+                        progress_callback: Optional[callable] = None) -> None:
+        """Initialize cache with all playlists asynchronously."""
         async with self._initialization_lock:
             if self._initialized:
                 self.logger.warning("Cache already initialized")
+                self.initialized.emit()  # Add this to ensure signal is emitted
                 return
                 
             if self._initialization_started:

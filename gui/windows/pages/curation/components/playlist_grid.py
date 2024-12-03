@@ -26,7 +26,7 @@ class PlaylistGrid(QScrollArea):
         
         # Set up logger explicitly
         self.logger = logging.getLogger('playlist_grid')
-        self.logger.setLevel(logging.DEBUG)
+        self.logger.setLevel(logging.INFO)
         
         # Ensure handler is added
         if not self.logger.handlers:

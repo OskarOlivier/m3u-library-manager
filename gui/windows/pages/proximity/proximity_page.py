@@ -2,26 +2,25 @@
 
 from pathlib import Path
 import logging
+import numpy as np
 from PyQt6.QtWidgets import QVBoxLayout, QWidget, QFrame, QLabel, QProgressBar
-from PyQt6.QtWebEngineWidgets import QWebEngineView
-from PyQt6.QtCore import Qt, QUrl, QThread, pyqtSignal
-from PyQt6.QtGui import QFont
-import tempfile
-import codecs
-import json
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 
 from app.config import Config
 from gui.windows.pages.base_page import BasePage
 from core.context import ApplicationContext
+from utils.m3u.parser import read_m3u
 from .state import ProximityState
-from .handlers.visualization_handler import VisualizationHandler
-from gui.components.panels.base_status_panel import StatusPanel
+from .visualization.graph_widget import PlaylistGraphWidget
+from .visualization.layout_manager import ForceAtlas2Layout
+from .visualization.interaction import GraphInteractionHandler
+from .visualization.styling import GraphStyles
 
 class ProximityPage(BasePage):
     """Page for visualizing playlist relationships."""
     
     initialization_complete = pyqtSignal()
-    
+
     def __init__(self, parent=None):
         # Initialize logger first
         self.logger = logging.getLogger('proximity_page')
@@ -39,17 +38,33 @@ class ProximityPage(BasePage):
         self._signals_connected = False
         self._cache_initialized = False
         self._is_first_show = True
+        self._initialization_in_progress = False
         
+        # Call parent constructor after initializing our attributes
         super().__init__(parent)
         
         # Connect to cache initialization
         self.context.cache.initialized.connect(self._on_cache_initialized)
-        
+    
     def init_page(self):
         """Initialize page components."""
         try:
-            self.logger.debug("Initializing proximity page components")
-            
+            if self._initialization_in_progress:
+                self.logger.debug("Initialization already in progress")
+                return
+
+            self._initialization_in_progress = True
+            self.logger.debug("Starting proximity page initialization")
+
+            # Cache should already be initialized by MainWindow
+            if not self.context.cache.is_initialized:
+                self.logger.error("Cache not initialized - this should not happen")
+                self.context.ui_service.show_error(
+                    "Initialization Error", 
+                    "Cache not properly initialized"
+                )
+                return
+
             if not self._handlers_initialized:
                 self._init_handlers()
                 
@@ -57,30 +72,44 @@ class ProximityPage(BasePage):
                 self._init_ui_components()
                 
             self.logger.debug("Proximity page components initialized")
+            self._initialization_in_progress = False
+            
+            # Try to update visualization after initialization
+            QTimer.singleShot(100, self._try_update_visualization)
             
         except Exception as e:
+            self._initialization_in_progress = False
             self.logger.error(f"Error initializing proximity page: {e}", exc_info=True)
             self.context.ui_service.show_error("Initialization Error", str(e))
             raise
+
+    def _on_cache_initialized(self):
+        """Handle cache initialization completion."""
+        self.logger.debug("Cache initialization complete")
+        self._cache_initialized = True
+        
+        if hasattr(self, 'loading_progress'):
+            self.loading_progress.setValue(50)
             
+        QTimer.singleShot(100, self._try_update_visualization)
+           
     def _init_handlers(self):
         """Initialize handlers safely."""
         try:
             self.logger.debug("Initializing handlers")
             
-            # Create and initialize visualization handler
-            self.visualization_handler = VisualizationHandler(
-                self.context,
-                self.playlists_dir
-            )
-            if not self.visualization_handler.initialize():  # Add this line
-                raise RuntimeError("Failed to initialize visualization handler")
+            # Create layout manager
+            self.layout_manager = ForceAtlas2Layout()
+            
+            # Create interaction handler
+            self.interaction_handler = GraphInteractionHandler()
             
             # Connect handler signals
-            self.visualization_handler.visualization_ready.connect(self._on_visualization_ready)
-            self.visualization_handler.error_occurred.connect(self._on_visualization_error)
+            self.layout_manager.layout_updated.connect(self._on_layout_updated)
+            self.layout_manager.iteration_complete.connect(self._on_layout_iteration)
             
             self._handlers_initialized = True
+            self.logger.debug("Handlers initialized successfully")
             
         except Exception as e:
             self.logger.error(f"Error initializing handlers: {e}")
@@ -94,9 +123,9 @@ class ProximityPage(BasePage):
             self.loading_overlay = QWidget(self)
             overlay_layout = QVBoxLayout(self.loading_overlay)
             overlay_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            
+                        
             loading_label = QLabel("Initializing visualization...", self.loading_overlay)
-            loading_label.setFont(QFont("Segoe UI", 12))
+            loading_label.setFont(GraphStyles.LABEL_STYLES['base_font'])  # Using the QFont object
             loading_label.setStyleSheet("color: white;")
             overlay_layout.addWidget(loading_label)
             
@@ -116,32 +145,21 @@ class ProximityPage(BasePage):
             """)
             overlay_layout.addWidget(self.loading_progress)
             
-            self.loading_overlay.setStyleSheet("""
-                QWidget {
-                    background-color: #202020;
-                }
+            self.loading_overlay.setStyleSheet(f"""
+                QWidget {{
+                    background-color: {GraphStyles.COLORS['background']};
+                }}
             """)
             
-            # Create main widget to hold visualization
-            self.visualization_widget = QWidget(self)
-            self.visualization_widget.setObjectName("visualization_container")
+            # Create visualization widget
+            self.visualization_widget = PlaylistGraphWidget(self)
+            self.visualization_widget.setObjectName("visualization_widget")
             self.visualization_widget.hide()  # Hide until ready
             
-            # Create layout
-            layout = QVBoxLayout(self.visualization_widget)
-            layout.setContentsMargins(0, 0, 0, 0)
-            layout.setSpacing(0)
-            
-            # Create web view in main thread
-            self.web_view = QWebEngineView()
-            self.web_view.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
-            
-            # Add status panel
-            self.status_panel = StatusPanel(self.state)
-            layout.addWidget(self.status_panel)
-            
-            # Add to layout
-            layout.addWidget(self.web_view)
+            # Connect visualization signals
+            self.visualization_widget.node_selected.connect(self._on_node_selected)
+            self.visualization_widget.node_hovered.connect(self._on_node_hovered)
+            self.visualization_widget.layout_stabilized.connect(self._on_layout_stabilized)
             
             self._ui_initialized = True
             
@@ -160,11 +178,11 @@ class ProximityPage(BasePage):
         
         # Create container frame
         container = QFrame(self)
-        container.setStyleSheet("""
-            QFrame {
-                background-color: #202020;
+        container.setStyleSheet(f"""
+            QFrame {{
+                background-color: {GraphStyles.COLORS['background']};
                 border: none;
-            }
+            }}
         """)
         
         # Container layout
@@ -180,117 +198,137 @@ class ProximityPage(BasePage):
         
         # Add to main layout
         self._layout.addWidget(container)
-        
-        # Connect signals if needed
-        if not self._signals_connected:
-            self.connect_signals()
-            self._signals_connected = True
-            
-    def connect_signals(self):
-        """Connect all component signals."""
-        try:
-            # Connect web view signals
-            self.web_view.loadFinished.connect(self._on_load_finished)
-            
-            # Connect state signals
-            self.state.visualization_updated.connect(self._on_visualization_updated)
-            self.state.error_occurred.connect(self._on_state_error)
-            
-            self._signals_connected = True
-            
-        except Exception as e:
-            self.logger.error(f"Error connecting signals: {e}")
-            self.context.ui_service.show_error("Signal Connection Error", str(e))
-            
-    def _on_cache_initialized(self):
-        """Handle cache initialization completion."""
-        self.logger.debug("Cache initialization complete")
-        self._cache_initialized = True
-        self.loading_progress.setValue(50)
-        
-        if hasattr(self, 'visualization_handler'):
-            self._try_update_visualization()
             
     def _try_update_visualization(self):
         """Attempt to update visualization if all conditions are met."""
-        if not self._cache_initialized:
-            self.logger.debug("Cache not initialized, deferring visualization")
-            return False
-            
-        if not self._ui_initialized:
-            self.logger.debug("UI not initialized, deferring visualization")
-            return False
-            
         try:
-            self.loading_progress.setValue(75)
-            success = self.visualization_handler.update_visualization()
+            self.logger.debug("Attempting to update visualization")
             
-            if success:
-                self.loading_progress.setValue(100)
-                self.loading_overlay.hide()
-                self.visualization_widget.show()
+            if not self.context.cache.is_initialized:
+                self.logger.debug("Cache not initialized, deferring visualization")
+                return False
                 
-            return success
+            if not self._ui_initialized:
+                self.logger.debug("UI not initialized, deferring visualization")
+                return False
+                
+            self.loading_progress.setValue(75)
             
+            # Generate visualization data
+            nodes_data, edges_data = self._generate_visualization_data()
+            
+            # Update graph - this will initialize the layout internally
+            self.visualization_widget.update_graph(nodes_data, edges_data)
+            
+            self.loading_progress.setValue(100)
+            QTimer.singleShot(500, self._show_visualization)
+            return True
+                
         except Exception as e:
             self.logger.error(f"Error updating visualization: {e}")
             self.context.ui_service.show_error("Visualization Error", str(e))
             return False
             
-    def _on_load_finished(self, ok: bool):
-        """Handle web view load completion."""
-        if ok:
-            self.logger.debug("Visualization loaded successfully")
-            if hasattr(self, 'visualization_handler'):
-                self.visualization_handler.setup_web_channel(self.web_view)
-        else:
-            self.logger.error("Failed to load visualization")
-            self.context.ui_service.show_error(
-                "Visualization Error",
-                "Failed to load network visualization"
-            )
-            
-    def _on_visualization_ready(self, html_path: str):
-        """Handle visualization HTML ready."""
+    def _generate_visualization_data(self):
+        nodes_data = []
+        edges_data = []
+        
         try:
-            self.web_view.setUrl(QUrl.fromLocalFile(html_path))
+            # Get regular playlists
+            from utils.playlist import get_regular_playlists
+            playlists = get_regular_playlists(self.playlists_dir)
+            
+            for playlist_path in playlists:
+                # Get track count for mass calculation
+                tracks = len(read_m3u(str(playlist_path)))
+                nodes_data.append({
+                    'id': str(playlist_path),
+                    'label': playlist_path.stem,
+                    'value': tracks,  # Track count determines size and mass
+                    'mass': 1 + np.log1p(tracks) * 0.2  # Logarithmic scaling for mass
+                })
+                
+                # Get relationships for edges
+                relationships = self.context.cache.get_related_playlists(
+                    str(playlist_path)
+                )
+                for target_id, strength in relationships.items():
+                    if str(playlist_path) < target_id:
+                        edges_data.append({
+                            'from': str(playlist_path),
+                            'to': target_id,
+                            'value': strength
+                        })
+                        
+            return nodes_data, edges_data
+            
         except Exception as e:
-            self.logger.error(f"Error loading visualization: {e}")
-            self.context.ui_service.show_error(
-                "Visualization Error",
-                "Failed to display visualization"
-            )
+            self.logger.error(f"Error generating visualization data: {e}")
+            raise
             
-    def _on_visualization_error(self, error: str):
-        """Handle visualization errors."""
-        self.logger.error(f"Visualization error: {error}")
-        self.context.ui_service.show_error("Visualization Error", error)
+    def _on_layout_updated(self, positions):
+        """Handle layout update."""
+        self.visualization_widget.update_positions(positions)
+        
+    def _on_layout_iteration(self, iteration):
+        """Handle layout iteration progress."""
+        progress = min(100, int((iteration / 100) * 100))  # Ensure integer value
+        if hasattr(self, 'loading_progress'):
+            self.loading_progress.setValue(75 + int(progress * 0.25))  # Convert to integer
+        
+    def _on_layout_stabilized(self):
+        """Handle layout stabilization."""
+        if hasattr(self, 'loading_progress'):
+            self.loading_progress.setValue(100)
             
-    def _on_visualization_updated(self):
-        """Handle visualization update completion."""
-        self.state.set_status("Visualization updated successfully")
+    def _on_node_selected(self, node_id: str):
+        """Handle node selection."""
+        self.state.select_node(node_id)
         
-    def _on_state_error(self, error: str):
-        """Handle state errors."""
-        self.context.ui_service.show_error("State Error", error)
+    def _on_node_hovered(self, node_id: str):
+        """Handle node hover."""
+        # Update state if needed
+        pass
         
+    def _show_visualization(self):
+        """Show visualization after loading."""
+        try:
+            self.logger.debug("Showing visualization")
+            if hasattr(self, 'loading_overlay'):
+                self.loading_overlay.hide()
+            if hasattr(self, 'visualization_widget'):
+                self.visualization_widget.show()
+        except Exception as e:
+            self.logger.error(f"Error showing visualization: {e}")
+            
     def showEvent(self, event):
         """Handle show event."""
-        super().showEvent(event)
         try:
+            self.logger.debug("Show event triggered")
+            
             # Initialize if needed
             if self._is_first_show:
-                self.init_page()
-                self.setup_ui()
+                self.logger.debug("First show - starting initialization")
+                if hasattr(self, 'loading_overlay'):
+                    self.loading_overlay.show()
+                if hasattr(self, 'visualization_widget'):
+                    self.visualization_widget.hide()
+                if hasattr(self, 'loading_progress'):
+                    self.loading_progress.setValue(25)
+                
+                # Start initialization process
+                QTimer.singleShot(100, self.init_page)
                 self._is_first_show = False
+            else:
+                self.logger.debug("Subsequent show - updating visualization")
+                # Handle subsequent shows
+                if hasattr(self, 'loading_overlay'):
+                    self.loading_overlay.show()
+                if hasattr(self, 'visualization_widget'):
+                    self.visualization_widget.hide()
+                QTimer.singleShot(100, self._try_update_visualization)
                 
-            # Show loading overlay
-            self.loading_overlay.show()
-            self.visualization_widget.hide()
-            self.loading_progress.setValue(25)
-                
-            # Update visualization
-            self._try_update_visualization()
+            super().showEvent(event)
                 
         except Exception as e:
             self.logger.error(f"Error in show event: {e}", exc_info=True)
@@ -299,8 +337,8 @@ class ProximityPage(BasePage):
     def hideEvent(self, event):
         """Handle hide event."""
         try:
+            self.logger.debug("Hide event triggered")
             super().hideEvent(event)
-            self.logger.debug("Hiding proximity page")
             
             # Cache state before hiding
             if hasattr(self, 'state'):
@@ -315,21 +353,17 @@ class ProximityPage(BasePage):
         try:
             self.logger.debug("Starting proximity page cleanup")
             
-            # Clean up visualization handler
-            if hasattr(self, 'visualization_handler'):
-                self.visualization_handler.cleanup()
-                self.visualization_handler = None
+            # Clean up visualization widget
+            if hasattr(self, 'visualization_widget'):
+                self.visualization_widget.cleanup()
+                self.visualization_widget = None
                 
-            # Clean up web view
-            if hasattr(self, 'web_view'):
-                self.web_view.setUrl(QUrl())
-                self.web_view.deleteLater()
-                self.web_view = None
+            # Clean up handlers
+            if hasattr(self, 'layout_manager'):
+                self.layout_manager.stop()
                 
-            # Clean up status panel
-            if hasattr(self, 'status_panel'):
-                self.status_panel.cleanup()
-                self.status_panel = None
+            if hasattr(self, 'interaction_handler'):
+                self.interaction_handler = None
                 
             # Reset flags
             self._ui_initialized = False
