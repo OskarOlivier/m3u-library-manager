@@ -93,7 +93,8 @@ class SyncPage(BasePage):
                 self.state, 
                 self.connection,
                 self.sync_service,
-                self.playlist_service
+                self.playlist_service,
+                self.context.ui_service  # Pass UI service from context
             )
             self._handlers_initialized = True
         except Exception as e:

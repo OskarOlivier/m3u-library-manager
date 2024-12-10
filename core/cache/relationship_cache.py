@@ -25,7 +25,8 @@ class RelationshipMetrics:
         """Get normalized relationship score (0-1)."""
         if self.source_size == 0 or self.target_size == 0:
             return 0.0
-        return self.intersection_size / min(self.source_size, self.target_size)
+        #return self.intersection_size / min(self.source_size, self.target_size)
+        return self.intersection_size
     
     @property
     def has_relationship(self) -> bool:
@@ -124,7 +125,7 @@ class RelationshipCache(CacheBase):
                     
                     self._cache[source_id] = {}
                     
-                    MIN_INTERSECTION_THRESHOLD = 3  # Example: At least 3 shared tracks
+                    MIN_INTERSECTION_THRESHOLD = 1  # Example: At least 3 shared tracks
                     
                     # Calculate relationships with other playlists
                     for target_id, target_tracks in self._playlist_tracks.items():

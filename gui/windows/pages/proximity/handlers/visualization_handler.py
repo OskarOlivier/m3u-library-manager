@@ -2,11 +2,14 @@
 
 from PyQt6.QtCore import pyqtSignal
 from PyQt6.QtWebEngineWidgets import QWebEngineView
+from PyQt6.QtWebChannel import QWebChannel
 from pathlib import Path
 import tempfile
 import codecs
 from typing import Dict, List, Optional, Set
+import logging
 
+from utils.m3u.parser import read_m3u
 from core.handlers.base_handler import BaseHandler
 from core.context import ApplicationContext
 from ..visualization.web_bridge import WebChannelBridge
@@ -36,9 +39,12 @@ class VisualizationHandler(BaseHandler):
         self.temp_html_path = None
         self.web_view = None
         
-        # Track selected nodes
+        # Track states
         self.selected_node: Optional[str] = None
         self.highlighted_nodes: Set[str] = set()
+        self._is_updating = False
+        self._web_channel_setup = False
+        self._visualization_ready = False
         
     def _do_initialize(self) -> bool:
         """Initialize visualization components."""
@@ -56,20 +62,27 @@ class VisualizationHandler(BaseHandler):
                 self.report_error("Handler not initialized")
                 return False
                 
+            if self._web_channel_setup:
+                self.logger.debug("Web channel already set up")
+                return True
+                
             self.web_view = web_view
             
             # Create network handler
-            self.network_handler = NetworkEventHandler()
+            if not self.network_handler:
+                self.network_handler = NetworkEventHandler()
             
             # Create web bridge
-            self.web_bridge = WebChannelBridge(
-                web_view,
-                self.network_handler
-            )
+            if not self.web_bridge:
+                self.web_bridge = WebChannelBridge(
+                    web_view,
+                    self.network_handler
+                )
             
-            # Connect network handler signals
+            # Connect network handler signals if not already connected
             self._connect_network_signals()
             
+            self._web_channel_setup = True
             self.update_status("Web channel setup complete")
             return True
             
@@ -82,6 +95,16 @@ class VisualizationHandler(BaseHandler):
         if not self.network_handler:
             return
             
+        # Safely disconnect any existing connections first
+        try:
+            self.network_handler.node_selected.disconnect()
+            self.network_handler.node_hovered.disconnect()
+            self.network_handler.error_occurred.disconnect()
+            self.network_handler.stabilization_complete.disconnect()
+            self.network_handler.stabilization_progress.disconnect()
+        except:
+            pass
+            
         # Forward relevant signals
         self.network_handler.node_selected.connect(self._handle_node_selected)
         self.network_handler.node_hovered.connect(self.node_hovered)
@@ -90,7 +113,7 @@ class VisualizationHandler(BaseHandler):
         
         # Connect progress updates
         self.network_handler.stabilization_progress.connect(self.update_progress)
-        
+            
     def update_visualization(self) -> bool:
         """Generate and update the network visualization."""
         try:
@@ -100,8 +123,13 @@ class VisualizationHandler(BaseHandler):
                 
             if not self.relationship_cache.is_initialized:
                 self.logger.warning("Cache not initialized")
-                return
+                return False
                 
+            if self._is_updating:
+                self.logger.debug("Visualization update already in progress")
+                return False
+                
+            self._is_updating = True
             self.update_status("Generating visualization...")
             
             # Generate data
@@ -118,6 +146,7 @@ class VisualizationHandler(BaseHandler):
                 f.write(html_content)
                 
             # Emit ready signal
+            self._visualization_ready = True
             self.visualization_ready.emit(str(self.temp_html_path))
             self.update_status("Visualization updated")
             return True
@@ -125,55 +154,65 @@ class VisualizationHandler(BaseHandler):
         except Exception as e:
             self.report_error(f"Failed to update visualization: {str(e)}")
             return False
+        finally:
+            self._is_updating = False
             
     def _generate_network_data(self) -> tuple[List[Dict], List[Dict]]:
         """Generate nodes and edges data from relationships."""
         nodes_data = []
         edges_data = []
-        
+
         try:
             # Get regular playlists
             from utils.playlist import get_regular_playlists
             playlists = get_regular_playlists(self.playlists_dir)
             
-            # Create nodes
+            # Track processed edges to avoid duplicates
+            processed_edges = set()
+            
+            # First pass: Create nodes and collect track counts
             for playlist_path in playlists:
+                track_count = len(read_m3u(str(playlist_path))) or 1
                 nodes_data.append({
                     'id': str(playlist_path),
                     'label': playlist_path.stem,
-                    'value': 1  # Default size
+                    'value': track_count,
+                    'title': f"{playlist_path.stem}\n{track_count} tracks"
                 })
                 
-                # Get relationships for edges
+                # Get relationships
                 relationships = self.relationship_cache.get_related_playlists(
                     str(playlist_path)
                 )
+                
+                # Create edges (avoiding duplicates)
                 for target_id, strength in relationships.items():
-                    # Avoid duplicate edges by using consistent ordering
-                    if str(playlist_path) < target_id:
+                    edge_key = tuple(sorted([str(playlist_path), target_id]))
+                    if edge_key not in processed_edges:
                         edges_data.append({
                             'from': str(playlist_path),
                             'to': target_id,
-                            'value': strength * 10,  # Scale for visibility
-                            'title': f"{strength:.1%} similarity"
+                            'value': strength * 10,
+                            'title': f"{strength} tracks in common"
                         })
+                        processed_edges.add(edge_key)
                         
             return nodes_data, edges_data
-            
+                
         except Exception as e:
             self.report_error(f"Error generating network data: {str(e)}")
             raise
             
     def _handle_node_selected(self, node_id: str):
         """Handle node selection from network."""
-        try:
-            if node_id == self.selected_node:
-                return
-                
-            self.selected_node = node_id
-            self.node_selected.emit(node_id)
+        if node_id == self.selected_node:
+            return
             
-            # Get relationships
+        self.selected_node = node_id
+        self.node_selected.emit(node_id)
+        
+        try:
+            # Update relationships
             relationships = self.relationship_cache.get_related_playlists(node_id)
             self.highlighted_nodes = set(relationships.keys())
             
@@ -210,7 +249,7 @@ class VisualizationHandler(BaseHandler):
             self.web_view.page().runJavaScript(script)
             
         except Exception as e:
-            self.report_error(f"Error updating node values: {str(e)}")
+            self.report_error(f"Error updating node values: {str(e)}")            
             
     def _do_cleanup(self):
         """Clean up visualization resources."""
@@ -234,6 +273,9 @@ class VisualizationHandler(BaseHandler):
             self.selected_node = None
             self.highlighted_nodes.clear()
             self.web_view = None
+            self._is_updating = False
+            self._web_channel_setup = False
+            self._visualization_ready = False
             
         except Exception as e:
             self.report_error(f"Error during cleanup: {str(e)}")

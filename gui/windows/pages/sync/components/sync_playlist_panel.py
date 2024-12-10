@@ -68,9 +68,18 @@ class PlaylistPanel(BasePlaylistPanel):
             self.analyze_requested.emit(self.current_playlist)
             
     def _on_upload_clicked(self):
-        """Handle upload button click."""
+        """Handle upload button click thread-safely."""
         if self.current_playlist and self.on_upload:
-            self.on_upload(self.current_playlist)
+            # Button state will be handled by Qt's event loop
+            self.upload_btn.setEnabled(False)
+            try:
+                self.on_upload(self.current_playlist)
+            except Exception as e:
+                self.logger.error(f"Error starting upload: {e}")
+                self.context.ui_service.show_error("Upload Error", str(e))
+            finally:
+                # Re-enable after operation started
+                self.upload_btn.setEnabled(True)
             
     def update_playlist(self, playlist_path: Path, analysis):
         """Update playlist display with sync analysis."""

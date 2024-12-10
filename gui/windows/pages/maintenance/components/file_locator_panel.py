@@ -27,10 +27,10 @@ class FileLocatorPanel(BaseFilePanel):
         self.state = state
         self.sync_direction = 'both'
         self.alternatives: Dict[Path, Set[Path]] = {}  # Initialize alternatives dict
-        self.add_remote_btn = None
-        self.delete_local_btn = None
-        self.add_local_btn = None
-        self.delete_remote_btn = None
+        self.add_to_remote_playlist_btn = None
+        self.remove_from_local_playlist_btn = None
+        self.add_to_local_playlist_btn = None
+        self.remove_from_remote_playlist_btn = None
         self.verify_btn = None
         
         # Call parent init which will call setup_action_buttons

@@ -10,8 +10,6 @@ class BasePage(QWidget):
         super().__init__(parent)
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setStyleSheet("background-color: #202020;")
-        self.init_page()
-        self.setup_ui()
     
     def init_page(self):
         """Initialize page components. Must be implemented by subclasses."""

@@ -6,6 +6,7 @@ from PyQt6.QtCore import Qt, QPoint, QTimer, QSize, QRect, pyqtSignal
 from PyQt6.QtGui import QFont, QScreen
 from pathlib import Path
 import logging
+import asyncio
 
 from core.events.event_bus import EventBus
 from core.cache.relationship_cache import RelationshipCache
@@ -88,11 +89,14 @@ class MainWindow(QMainWindow):
         self.logger = logging.getLogger('MainWindow')
         self.logger.info("Initializing main window")
 
-        # Initialize context and ensure it's ready
+        # Initialize context and ensure cache is ready synchronously
         self.context = ApplicationContext.get_instance()
-        #if not self.context.is_initialized():
-        #    self.logger.info("Initializing application context")
-        #    self.context.ensure_initialized(Path(Config.PLAYLISTS_DIR))
+        if not self.context.cache.is_initialized:
+            self.logger.info("Initializing cache")
+            asyncio.get_event_loop().run_until_complete(
+                self.context.cache.initialize(Path(Config.PLAYLISTS_DIR))
+            )
+            self.logger.info("Cache initialization complete")
 
         # Initialize tracking variables
         self.oldPos = None
@@ -107,12 +111,6 @@ class MainWindow(QMainWindow):
         
         # Set up fullscreen
         self.make_fullscreen()
-        
-        # Setup cleanup button update timer
-        self.cleanup_update_timer = QTimer(self)
-        self.cleanup_update_timer.timeout.connect(self.update_cleanup_button)
-        self.cleanup_update_timer.start(5000)  # Update every 5 seconds
-        self.update_cleanup_button()
 
         # Start with curation page
         self.switch_page('curation')
@@ -302,15 +300,18 @@ class MainWindow(QMainWindow):
         """Switch to specified page and update navigation."""
         if page_name not in self.pages or self.is_quitting:
             return
-            
+                
         try:
+            # Preserve window state
+            current_state = self.windowState()
             self.content.setCurrentWidget(self.pages[page_name])
+            self.setWindowState(current_state)  # Restore state after switch
             self.current_page = page_name
             
             # Update navigation buttons
             for name, btn in self.nav_buttons.items():
                 btn.set_active(name == page_name)
-                
+                    
         except Exception as e:
             self.logger.error(f"Error switching to page {page_name}: {e}")
             
@@ -331,7 +332,8 @@ class MainWindow(QMainWindow):
     def hideEvent(self, event):
         """Handle window hide events."""
         super().hideEvent(event)
-        self.logger.debug("Window hidden")
+        #self.logger.debug("Window hidden")
+        self.logger.debug("Window hidden", stack_info=True)
 
     def closeEvent(self, event):
         """Handle window close events - always minimize to tray."""

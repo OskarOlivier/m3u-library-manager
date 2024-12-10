@@ -31,6 +31,71 @@ class SyncOperations:
         self.remote_base = remote_base
         self.logger = logging.getLogger('sync_operations')
         
+    async def upload_playlist(self, playlist_path: Path, progress_callback: Optional[Callable[[int], None]] = None) -> bool:
+        """Upload a playlist file to remote location."""
+        try:
+            self.logger.info(f"Starting playlist upload: {playlist_path.name}")
+
+            # Get playlist content
+            content = read_m3u(str(playlist_path))
+            if not content:
+                raise RuntimeError("Failed to read playlist content")
+
+            # Create temp file with normalized paths
+            temp_path = Path(tempfile.gettempdir()) / f"temp_{playlist_path.name}"
+            write_m3u(str(temp_path), content, use_absolute_paths=False)
+
+            # Report initial progress
+            if progress_callback:
+                progress_callback(10)
+
+            # Copy to remote
+            remote_path = f"{self.remote_base}/{playlist_path.name}"
+            success = self.ssh_handler.copy_to_remote(temp_path, remote_path)
+
+            # Clean up temp file
+            if temp_path.exists():
+                temp_path.unlink()
+
+            if not success:
+                return False
+
+            # Verify upload
+            if progress_callback:
+                progress_callback(50)
+
+            verify_temp = Path(tempfile.gettempdir()) / f"verify_{playlist_path.name}"
+            verify_success = self.ssh_handler.copy_from_remote(remote_path, verify_temp)
+            
+            if not verify_success:
+                self.logger.error("Failed to verify upload")
+                return False
+
+            # Verify content
+            verify_content = read_m3u(str(verify_temp))
+            if verify_temp.exists():
+                verify_temp.unlink()
+
+            if not verify_content or set(verify_content) != set(content):
+                self.logger.error("Upload verification failed - content mismatch")
+                return False
+
+            if progress_callback:
+                progress_callback(100)
+
+            self.logger.info(f"Successfully uploaded playlist: {playlist_path.name}")
+            return True
+
+        except Exception as e:
+            self.logger.error(f"Upload failed: {e}", exc_info=True)
+            return False
+
+        finally:
+            # Clean up any remaining temp files
+            for temp_file in [temp_path, verify_temp]:
+                if 'temp_file' in locals() and temp_file.exists():
+                    temp_file.unlink()
+        
     async def add_to_remote(self, files: Set[Path], playlist_path: Path,
                            progress_callback: Optional[Callable[[float], None]] = None) -> bool:
         """

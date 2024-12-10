@@ -1,0 +1,4 @@
+# all pages but proximity
+gui/windows/pages/curation/
+gui/windows/pages/proximity/
+gui/windows/pages/maintenance/

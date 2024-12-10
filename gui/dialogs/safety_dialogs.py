@@ -41,7 +41,7 @@ class DeleteConfirmDialog(BaseDialog):
         ).pixmap(32, 32))
         
         message = QLabel(
-            f"Are you sure you want to delete {count} files from the {location} location?\n\n"
+            f"Are you sure you want to remove {count} tracks from the {location} playlist?\n\n"
             "This operation cannot be undone."
         )
         message.setWordWrap(True)

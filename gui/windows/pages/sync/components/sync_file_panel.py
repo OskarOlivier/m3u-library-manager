@@ -65,21 +65,21 @@ class SyncFilePanel(BaseFilePanel):
         if self.is_remote:
             self.add_button = self._create_button(
                 "Add to Remote",
-                lambda: self._handle_sync_operation('add_remote')
+                lambda: self._handle_sync_operation('add_to_remote_playlist')
             )
             self.delete_button = self._create_button(
-                "Delete Locally",
-                lambda: self._handle_sync_operation('delete_local')
+                "Remove from Local",
+                lambda: self._handle_sync_operation('remove_from_local_playlist')
             )
             self.logger.debug("Created remote operation buttons")
         else:
             self.add_button = self._create_button(
                 "Add to Local",
-                lambda: self._handle_sync_operation('add_local')
+                lambda: self._handle_sync_operation('add_to_local_playlist')
             )
             self.delete_button = self._create_button(
-                "Delete from Remote",
-                lambda: self._handle_sync_operation('delete_remote')
+                "Remove from Remote",
+                lambda: self._handle_sync_operation('remove_from_remote_playlist')
             )
             self.logger.debug("Created local operation buttons")
             
@@ -120,7 +120,7 @@ class SyncFilePanel(BaseFilePanel):
 
             # Show appropriate confirmation dialog
             if operation.startswith('delete'):
-                location = 'local' if operation == 'delete_local' else 'remote'
+                location = 'local' if operation == 'remove_from_local_playlist' else 'remote'
                 if not SafetyDialogs.confirm_deletion(location, len(files)):
                     self.logger.debug("Deletion cancelled by user")
                     return

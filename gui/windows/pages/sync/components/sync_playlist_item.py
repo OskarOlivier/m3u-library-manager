@@ -1,5 +1,6 @@
 # gui/windows/pages/sync/components/sync_playlist_item.py
 from PyQt6.QtCore import Qt
+from PyQt6.QtWidgets import QListWidget, QListWidgetItem
 
 from gui.components.widgets.playlist_item import PlaylistItem
 from gui.components.styles.colors import (
@@ -49,9 +50,22 @@ class SyncPlaylistItem(PlaylistItem):
        self.setToolTip(tooltip)
 
     def mousePressEvent(self, event):
+        """Handle mouse press events."""
         if event.button() == Qt.MouseButton.LeftButton:
-            self.set_selected(not self._selected)
-            self.clicked.emit(self.playlist_path)
+            # Find parent list widget
+            parent_list = self.parent()
+            while parent_list and not isinstance(parent_list, QListWidget):
+                parent_list = parent_list.parent()
+                
+            if parent_list:
+                # Let Qt handle the selection through standard mechanism
+                for i in range(parent_list.count()):
+                    item = parent_list.item(i)
+                    if parent_list.itemWidget(item) == self:
+                        parent_list.setCurrentItem(item)
+                        break
+
+        super().mousePressEvent(event)
 
     def set_sync_state(self, exists_remotely: bool, missing_remotely: int, missing_locally: int):
        self._exists_remotely = exists_remotely
